@@ -1,0 +1,31 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8081:8081"
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - HOST_KEY=${HOST_KEY}
+      - HTTP_PORT=8081
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    volumes:
+      - ./public:/usr/share/nginx/html:ro
+      - ./nginx:/etc/nginx/conf.d:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - server

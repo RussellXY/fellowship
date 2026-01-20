@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Fellowship</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="container">
+    <div id="meeting"></div>
+    <div id="live">
+      <video id="player" playsinline></video>
+      <div id="controls">
+        <button id="playBtn">播放</button>
+        <button id="pauseBtn">暂停</button>
+        <button id="rewindBtn">快退10秒</button>
+        <button id="forwardBtn">快进10秒</button>
+        <button id="refreshBtn">刷新直播</button>
+        <button id="fullscreenBtn">直播全屏</button>
+      </div>
+    </div>
+  </div>
+
+  <button id="toggle-live" style="display:none;">🎬</button>
+
+  <script src="https://meet.jit.si/external_api.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="main.js"></script>
+</body>
+</html>

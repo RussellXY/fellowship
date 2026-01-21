@@ -52,10 +52,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       console.log('[WS] connected');
       wsConnecting = false;
       wsRetry = 0;
-
-      setTimeout(() => {
-        wsSend({ type: 'sync-response' });
-      }, 100);
+      wsSend({ type: 'sync-response' });
     };
 
     ws.onmessage = e => {
@@ -93,6 +90,8 @@ window.addEventListener('DOMContentLoaded', async () => {
       video.load();
     }
   }
+
+  connectWS();
 
   let lastRefreshAt = 0;
 
@@ -141,7 +140,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ===== 4. HLS 播放 =====
-  const liveUrl = "/live/hls/stream.m3u8";
+  const isDev =
+  location.hostname === 'localhost' ||
+  location.hostname === '127.0.0.1';
+
+  const liveUrl = isDev
+    ? 'http://ec2-13-124-131-156.ap-northeast-2.compute.amazonaws.com:8080/hls/stream.m3u8'
+    : '/live/hls/stream.m3u8';
   let hls;
 
   if (Hls.isSupported()) {
@@ -222,8 +227,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   api.addEventListener('videoConferenceJoined', () => {
     console.log('[JITSI] conference joined');
     hasJoinedMeeting = true;
-
-    connectWS();
 
     // 🔥 如果服务器当前是 showLive=true，补一次显示
     if (pendingShowLive === true) {

@@ -136,10 +136,11 @@ wss.on('connection', async (ws, req) => {
   });
 
   // ===== 解析 room =====
-  const params = new URLSearchParams(req.url.replace('/?', ''));
-  const roomId = params.get('room');
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const roomId = url.searchParams.get('room');
 
   if (!roomId) {
+    console.log('[WS] closed by server');
     ws.close();
     return;
   }

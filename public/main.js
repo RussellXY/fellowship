@@ -35,9 +35,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   function connectWS() {
     const delay = Math.min(1000 * 2 ** wsRetry, 10000);
 
-    ws = new WebSocket(
-      `ws://${window.location.hostname}:3001?room=${encodeURIComponent(ROOM_NAME)}`
-    );
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${protocol}://${location.host}/ws/?room=${encodeURIComponent(ROOM_NAME)}`;
+    ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
       console.log('[WS] connected');

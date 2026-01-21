@@ -9,7 +9,6 @@ services:
       - "3001:3001"
     environment:
       - NODE_ENV=production
-      - HOST_KEY=${HOST_KEY}
       - HTTP_PORT=8081
       - REDIS_HOST=redis
     depends_on:
@@ -25,7 +24,9 @@ services:
     volumes:
       - ./public:/usr/share/nginx/html:ro
       - ./nginx:/etc/nginx/conf.d:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     ports:
       - "80:80"
+      - "443:443"
     depends_on:
       - server

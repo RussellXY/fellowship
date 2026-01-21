@@ -29,36 +29,49 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   // ===== 3. WebSocket =====
-  let ws;
   let wsRetry = 0;
+  let ws = null;
+  let wsConnecting = false;
+  let wsRetryTimer = null;
 
   function connectWS() {
-    const delay = Math.min(1000 * 2 ** wsRetry, 10000);
+    if (ws && (ws.readyState === WebSocket.OPEN || wsConnecting)) {
+      return;
+    }
+
+    wsConnecting = true;
 
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
     const wsUrl = `${protocol}://${location.host}/ws/?room=${encodeURIComponent(ROOM_NAME)}`;
+
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
       console.log('[WS] connected');
+      wsConnecting = false;
       wsRetry = 0;
-      ws.send(JSON.stringify({ type: 'sync-request' }));
+
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'sync-request' }));
+        }
+      }, 100);
     };
 
     ws.onmessage = e => {
-      const data = JSON.parse(e.data);
-      handleWSMessage(data);
+      handleWSMessage(JSON.parse(e.data));
     };
 
     ws.onclose = () => {
+      wsConnecting = false;
       console.warn('[WS] disconnected, retry in', delay);
       wsRetry++;
-      setTimeout(connectWS, delay);
+      clearTimeout(wsRetryTimer);
+      wsRetryTimer = setTimeout(connectWS, delay);
     };
 
-    ws.onerror = e => {
-      console.error(e);
-      ws.close(); // 统一走 onclose
+    ws.onerror = () => {
+      ws.close();
     };
   }
 
@@ -128,11 +141,6 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     }
   }
-
-  ws.onmessage = e => {
-    const data = JSON.parse(e.data);
-    handleWSMessage(data);
-  };
 
   // ===== 4. HLS 播放 =====
   const liveUrl = "/live/hls/stream.m3u8";
@@ -236,9 +244,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   // ===== 5. 处理用户leave meet时回到主页面 =====
+  let pageReloading = false;
   api.addEventListener('readyToClose', () => {
-    // 回到 Jitsi 官方 Prejoin 页面
-    console.log('[JITSI] conference left');
+    if (pageReloading) return;
+    pageReloading = true;
     window.location.reload();
   });
 

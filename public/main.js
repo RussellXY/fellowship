@@ -1,3 +1,5 @@
+import { type } from "node:os";
+
 window.addEventListener('DOMContentLoaded', async () => {
 
   let hasJoinedMeeting = false;
@@ -53,7 +55,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
       setTimeout(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'sync-request' }));
+          wsSend({ type: 'sync-response' });
         }
       }, 100);
     };
@@ -173,25 +175,19 @@ window.addEventListener('DOMContentLoaded', async () => {
       video.controls = true;
 
       // ===== 告诉 WebSocket：我是主持人 =====
-      ws.send(JSON.stringify({ type: 'upgrade-role' }));
+      wsSend({type: 'upgrade-role'});
 
       // ===== 播放 =====
       playBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'play',
-            currentTime: video.currentTime
-          }));
+          wsSend({type: 'play', currentTime: video.currentTime});
         }
       };
 
       // ===== 暂停 =====
       pauseBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'pause',
-            currentTime: video.currentTime
-          }));
+          wsSend({type: 'pause', currentTime: video.currentTime});
         }
       };
 
@@ -199,10 +195,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       rewindBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
           const t = Math.max(video.currentTime - 10, 0);
-          ws.send(JSON.stringify({
-            type: 'pause',
-            currentTime: t
-          }));
+          wsSend({type: 'pause', currentTime: t });
         }
       };
 
@@ -210,10 +203,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       forwardBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
           const t = video.currentTime + 10;
-          ws.send(JSON.stringify({
-            type: 'pause',
-            currentTime: t
-          }));
+          wsSend({type: 'pause', currentTime: t });
         }
       };
 
@@ -227,7 +217,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       // ===== 刷新直播（HLS） =====
       refreshBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'refresh-live' }));
+          wsSend({type: 'refresh-live'});
         }
       };
     }
@@ -254,7 +244,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // ===== 6. toggle 按钮 =====
   toggleBtn.addEventListener("click", () => {
     const show = !live.classList.contains("show");
-    ws.send(JSON.stringify({ type: "toggle-live", show }));
+    wsSend({type: "toggle-live", show});
   });
 
   function getUserName() {
@@ -266,6 +256,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 
     return name;
+  }
+
+  function wsSend(payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] not open, reconnecting...');
+      connectWS();
+      return;
+    }
+    ws.send(JSON.stringify(payload));
   }
 
   function toggleLive(show) {
@@ -286,7 +285,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   ['play', 'pause', 'seeking'].forEach(evt => {
     video.addEventListener(evt, () => {
       if (!allowLocalControl) {
-        ws.send(JSON.stringify({ type: 'sync-request' }));
+        wsSend({type: 'sync-request'});
       }
     });
   });

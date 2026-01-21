@@ -134,7 +134,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   };
 
   // ===== 4. HLS 播放 =====
-  const liveUrl = "http://ec2-13-124-131-156.ap-northeast-2.compute.amazonaws.com:8080/hls/stream.m3u8";
+  const liveUrl = "/live/hls/stream.m3u8";
   let hls;
 
   if (Hls.isSupported()) {

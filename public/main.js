@@ -54,9 +54,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       wsRetry = 0;
 
       setTimeout(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          wsSend({ type: 'sync-response' });
-        }
+        wsSend({ type: 'sync-response' });
       }, 100);
     };
 
@@ -72,12 +70,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       wsRetryTimer = setTimeout(connectWS, retryDelay);
     };
 
-    ws.onerror = () => {
-      ws.close();
+    ws.onerror = e => {
+      console.warn(`[WS] error:${e}`);
     };
   }
-
-  connectWS();
 
   function refreshLiveStream() {
     console.log('[LIVE] refreshing stream');
@@ -227,6 +223,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     console.log('[JITSI] conference joined');
     hasJoinedMeeting = true;
 
+    connectWS();
+
     // 🔥 如果服务器当前是 showLive=true，补一次显示
     if (pendingShowLive === true) {
       toggleLive(true);
@@ -260,8 +258,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   function wsSend(payload) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn('[WS] not open, reconnecting...');
-      connectWS();
+      console.warn('[WS] send skipped, ws not open');
       return;
     }
     ws.send(JSON.stringify(payload));

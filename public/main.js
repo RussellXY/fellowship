@@ -16,7 +16,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   const refreshBtn = document.getElementById('refreshBtn');
 
   // ===== 1. 获取 token =====
-  const tokenRes = await fetch(`/get-token?room=${ROOM_NAME}&name=${USER_NAME}`);
+  const tokenRes = await fetch(`/api/get-token?room=${ROOM_NAME}&name=${USER_NAME}`);
   const token = await tokenRes.text();
 
   // ===== 2. 初始化 Jitsi =====

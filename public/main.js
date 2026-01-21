@@ -33,12 +33,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   let ws = null;
   let wsConnecting = false;
   let wsRetryTimer = null;
+  let retryDelay = 1000;
 
   function connectWS() {
     if (ws && (ws.readyState === WebSocket.OPEN || wsConnecting)) {
       return;
     }
 
+    retryDelay = Math.min(1000 * 2 ** wsRetry, 10000);
     wsConnecting = true;
 
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -64,10 +66,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     ws.onclose = () => {
       wsConnecting = false;
-      console.warn('[WS] disconnected, retry in', delay);
+      console.warn('[WS] disconnected, retry in', retryDelay);
       wsRetry++;
       clearTimeout(wsRetryTimer);
-      wsRetryTimer = setTimeout(connectWS, delay);
+      wsRetryTimer = setTimeout(connectWS, retryDelay);
     };
 
     ws.onerror = () => {

@@ -1,5 +1,3 @@
-import { type } from "node:os";
-
 window.addEventListener('DOMContentLoaded', async () => {
 
   let hasJoinedMeeting = false;

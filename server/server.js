@@ -128,6 +128,7 @@ async function publishAndBroadcast(roomId, payload) {
 }
 
 wss.on('connection', async (ws, req) => {
+  console.log('[WS] connected');
   // ===== 心跳初始化 =====
   ws.isAlive = true;
   ws.on('pong', () => {
@@ -211,6 +212,7 @@ wss.on('connection', async (ws, req) => {
 
   // ===== 断开连接 =====
   ws.on('close', async () => {
+    console.log('[WS] closed by server');
     const state = await getRoomState(roomId);
     if (!state) return;
 

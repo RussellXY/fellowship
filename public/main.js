@@ -56,7 +56,8 @@ window.addEventListener('DOMContentLoaded', async () => {
       setTimeout(connectWS, delay);
     };
 
-    ws.onerror = () => {
+    ws.onerror = e => {
+      console.error(e);
       ws.close(); // 统一走 onclose
     };
   }

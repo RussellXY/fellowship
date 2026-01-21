@@ -240,7 +240,7 @@ process.on('SIGTERM', () => clearInterval(heartbeat));
 process.on('SIGINT', () => clearInterval(heartbeat));
 
 // ===== JWT 接口 =====
-app.get('/api/get-token', (req, res) => {
+app.get('/get-token', (req, res) => {
   const { room, name } = req.query;
 
   const moderator = isHostAllowed(req, room);

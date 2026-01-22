@@ -2,6 +2,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   let hasJoinedMeeting = false;
   let pendingShowLive = null;
+  let isJoining = true;
+  document.body.classList.add('joining');
 
   const APP_ID = "vpaas-magic-cookie-20556988122d40bb94a9dfa6fd4437c7"
   const ROOM_NAME = "Fellowship";
@@ -15,6 +17,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   const toggleBtn = document.getElementById("toggle-live");
   const refreshBtn = document.getElementById('refreshBtn');
 
+  function isMobile() {
+    return window.matchMedia('(max-width: 768px)').matches;
+  }
+
   // ===== 1. 获取 token =====
   const tokenRes = await fetch(`/api/get-token?room=${ROOM_NAME}&name=${USER_NAME}`);
   const token = await tokenRes.text();
@@ -25,7 +31,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     parentNode: meeting,
     jwt: token,
     configOverwrite: { prejoinPageEnabled: false },
-    lang: "cn"
+    lang: "zh",
+    configOverwrite: {
+      prejoinPageEnabled: false,
+      disableDeepLinking: true,
+      startWithAudioMuted: isMobile(),
+      startWithVideoMuted: isMobile()
+    }
   });
 
   // ===== 3. WebSocket =====
@@ -225,6 +237,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     console.log('[JITSI] conference joined');
     hasJoinedMeeting = true;
 
+    isJoining = false;
+    document.body.classList.remove('joining');
+
     // 🔥 如果服务器当前是 showLive=true，补一次显示
     if (pendingShowLive === true) {
       toggleLive(true);
@@ -265,17 +280,20 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   function toggleLive(show) {
-    const liveWidth = 70;
-
-    if (show) {
-      meeting.style.width = `${100 - liveWidth}%`;
-      live.classList.add("show");
-      toggleBtn.textContent = "❌";
-    } else {
-      meeting.style.width = "100%";
-      live.classList.remove("show");
-      toggleBtn.textContent = "🎬";
+    if (isMobile()) {
+       live.classList.toggle('show', show);
     }
+    else {
+        const liveWidth = 70;
+        if (show) {
+          meeting.style.width = `${100 - liveWidth}%`;
+          live.classList.add("show");
+        } else {
+          meeting.style.width = "100%";
+          live.classList.remove("show");
+        }
+    }
+     toggleBtn.textContent = show ? "❌" : "🎬";
   }
 
   // ===== 7. 普通参会者禁止操作 =====

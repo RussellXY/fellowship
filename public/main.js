@@ -2,8 +2,6 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   let hasJoinedMeeting = false;
   let pendingShowLive = null;
-  let isJoining = true;
-  document.body.classList.add('joining');
 
   const APP_ID = "vpaas-magic-cookie-20556988122d40bb94a9dfa6fd4437c7"
   const ROOM_NAME = "Fellowship";
@@ -35,8 +33,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     configOverwrite: {
       prejoinPageEnabled: false,
       disableDeepLinking: true,
-      startWithAudioMuted: isMobile(),
-      startWithVideoMuted: isMobile()
+      startWithAudioMuted: true,
+      startWithVideoMuted: true
     }
   });
 
@@ -171,6 +169,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // ===== 5. 主持人识别 =====
   api.addEventListener('participantRoleChanged', e => {
+    console.log('Participant role changed: ', e);
     if (e.role === 'moderator') {
       IS_HOST = true;
       allowLocalControl = true;
@@ -236,9 +235,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   api.addEventListener('videoConferenceJoined', () => {
     console.log('[JITSI] conference joined');
     hasJoinedMeeting = true;
-
-    isJoining = false;
-    document.body.classList.remove('joining');
 
     // 🔥 如果服务器当前是 showLive=true，补一次显示
     if (pendingShowLive === true) {

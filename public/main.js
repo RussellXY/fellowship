@@ -44,7 +44,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     wsConnecting = true;
 
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${protocol}://${location.host}/ws/?room=${encodeURIComponent(ROOM_NAME)}`;
+    const wsUrl = `${protocol}://${location.host}/ws/?room=${encodeURIComponent(ROOM_NAME)}&name=${encodeURIComponent(USER_NAME)}`;
 
     ws = new WebSocket(wsUrl);
 
@@ -174,9 +174,6 @@ window.addEventListener('DOMContentLoaded', async () => {
       fullscreenBtn.style.display = "inline-block";
 
       video.controls = true;
-
-      // ===== 告诉 WebSocket：我是主持人 =====
-      wsSend({type: 'upgrade-role'});
 
       // ===== 播放 =====
       playBtn.onclick = () => {

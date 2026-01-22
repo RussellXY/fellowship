@@ -4,6 +4,7 @@ import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import { WebSocketServer } from 'ws';
 import Redis from 'ioredis';
+import crypto from 'crypto';
 
 const ROOM_TTL_SECONDS = 60 * 60 * 2; // 1 小时
 
@@ -12,6 +13,24 @@ const redis = new Redis({
   host: process.env.REDIS_HOST || 'redis',
   port: 6379
 });
+
+function roomUsersKey(roomId) {
+  return `fellowship:room:${roomId}:users`;
+}
+
+async function getRoomUsers(roomId) {
+  const data = await redis.get(roomUsersKey(roomId));
+  return data ? JSON.parse(data) : {};
+}
+
+async function setRoomUsers(roomId, users) {
+  await redis.set(
+    roomUsersKey(roomId),
+    JSON.stringify(users),
+    'EX',
+    ROOM_TTL_SECONDS
+  );
+}
 
 // ===== Redis Pub/Sub =====
 const redisSub = redis.duplicate();
@@ -22,10 +41,6 @@ function globalChannel() {
 
 function roomKey(roomId) {
   return `fellowship:room:${roomId}`;
-}
-
-function roomChannel(roomId) {
-  return `fellowship:room:channel:${roomId}`;
 }
 
 async function getRoomState(roomId) {
@@ -57,6 +72,38 @@ async function setRoomState(roomId, state) {
   );
 }
 
+function generateHashKey(value) {
+  const normalized = value.trim().toLowerCase();
+  return crypto
+    .createHash('sha256')
+    .update(normalized)
+    .digest('hex')
+    .slice(0, 32); // 32 chars 足够，JaaS 很安全
+}
+
+function globalUserID(username) {
+  const globalUserKey = `fellowship:user:global:${username.trim().toLowerCase()}`;
+  return generateHashKey(globalUserKey);
+}
+
+async function getOrCreateGlobalUser(username) {
+  const userId = globalUserID(username);
+  const raw = await redis.get(userId);
+
+  if (raw) {
+    return JSON.parse(raw);
+  }
+
+  const user = {
+    userId: userId,
+    username,
+    systemRole: 'user' // 默认不是主持人
+  };
+
+  await redis.set(userId, JSON.stringify(user));
+  return user;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.static('../public'));
@@ -72,15 +119,6 @@ let liveState = {
   showLive: false,
   refreshAt: 0 // 时间戳，用来区分是否需要刷新
 };
-
-function isHostAllowed(req, room) {
-  // 示例策略（你可以随时替换）
-  // 1. 本地环境：允许
-  if (process.env.NODE_ENV !== 'production') return true;
-
-  // 2. 生产环境：必须带一个 server-only key
-  return req.headers['x-fellowship-host-key'] === process.env.HOST_KEY;
-}
 
 // ===== WebSocket Server =====
 const wss = new WebSocketServer({ port: 3001 });
@@ -127,6 +165,15 @@ async function publishAndBroadcast(roomId, payload) {
   broadcast(roomId, payload);
 }
 
+async function broadcastRoomUsers(roomId) {
+  const users = await getRoomUsers(roomId);
+
+  await publishAndBroadcast(roomId, {
+    type: 'room-users',
+    users: Object.values(users)
+  });
+}
+
 wss.on('connection', async (ws, req) => {
   console.log('[WS] connected');
   // ===== 心跳初始化 =====
@@ -138,15 +185,38 @@ wss.on('connection', async (ws, req) => {
   // ===== 解析 room =====
   const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = url.searchParams.get('room');
+  const username = url.searchParams.get('name');
 
-  if (!roomId) {
-    console.log('[WS] closed by server');
+  if (!roomId || !username) {
+    console.log(`[WS] closed by server because of invalid roomId:${roomId} or username:${username}`);
     ws.close();
     return;
   }
 
+  const user = await getOrCreateGlobalUser(username);
+  ws.userId = user.userId;
+  ws.username = user.username;
+
+  ws.role = (user.systemRole === 'host' || user.systemRole === 'admin')
+    ? 'host'
+    : 'viewer';
+  
+  if (ws.role === 'host') {
+    const state = await getRoomState(roomId);
+    state.hostCount += 1;
+    await setRoomState(roomId, state);
+  }
+
   ws.room = roomId;
-  ws.role = 'viewer';
+
+  // 记录房间里的用户列表
+  const users = await getRoomUsers(roomId);
+  users[user.userId] = {
+    userId: user.userId,
+    username,
+    role: ws.role
+  };
+  await setRoomUsers(roomId, users);
 
   // ===== 初始化房间 =====
   const state = await getRoomState(roomId);
@@ -162,17 +232,6 @@ wss.on('connection', async (ws, req) => {
     try {
       data = JSON.parse(raw);
     } catch {
-      return;
-    }
-
-    // 主持人升级
-    if (data.type === 'upgrade-role') {
-      if (ws.role !== 'host') {
-        ws.role = 'host';
-        const state = await getRoomState(roomId);
-        state.hostCount += 1;
-        await setRoomState(roomId, state);
-      }
       return;
     }
 
@@ -211,30 +270,48 @@ wss.on('connection', async (ws, req) => {
     }
   });
 
+  // 广播房间里的用户列表信息
+  await broadcastRoomUsers(roomId);
+
   // ===== 断开连接 =====
   ws.on('close', async () => {
     console.log('[WS] closed by server');
     const state = await getRoomState(roomId);
     if (!state) return;
 
+    // 广播房间里的用户列表信息
+    const users = await getRoomUsers(roomId);
+    delete users[ws.userId];
+    if (Object.keys(users).length === 0) {
+      await redis.del(roomUsersKey(roomId));
+    } else {
+      await setRoomUsers(roomId, users);
+    }
+
+    await broadcastRoomUsers(roomId);
+
     if (ws.role === 'host') {
       state.hostCount--;
       if (state.hostCount <= 0) {
         state.showLive = false;
         state.playing = false;
-
+        
+        // 当所有主持人都离开时，自动关闭live界面，如果不需要的话可以注释这一段内容
         await publishAndBroadcast(roomId, {
           type: 'toggle-live',
           show: false
         });
+
         await setRoomState(roomId, state);
       }
-
-      const stillUsed = [...wss.clients].some(c => c.room === roomId);
-      if (!stillUsed) {
-        await redis.del(roomKey(roomId));
-      }
     }
+
+    const stillUsed = [...wss.clients].some(c => c.room === roomId);
+    if (!stillUsed) {
+      await redis.del(roomKey(roomId));
+    }
+
+
   });
 });
 
@@ -243,15 +320,24 @@ process.on('SIGTERM', () => clearInterval(heartbeat));
 process.on('SIGINT', () => clearInterval(heartbeat));
 
 // ===== JWT 接口 =====
-app.get('/api/get-token', (req, res) => {
+app.get('/api/get-token', async (req, res) => {
   const { room, name } = req.query;
 
-  const moderator = isHostAllowed(req, room);
+  if (!room || !name) {
+    return res.status(400).send('Missing room or name');
+  }
+
+  // 获取全局用户
+  const user = await getOrCreateGlobalUser(name);
+
+  // 是否给 JaaS moderator，只取决于 systemRole
+  const moderator = user.systemRole === 'host' || user.systemRole === 'admin';
+  
   const payload = {
     context: {
       user: {
-        id: name,
-        name,
+        id: user.userId,
+        name: user.username,
         moderator,
       }
     },
@@ -274,6 +360,25 @@ app.get('/api/get-token', (req, res) => {
   });
 
   res.send(token);
+});
+
+app.post('/api/admin/set-role', express.json(), async (req, res) => {
+  const { username, role } = req.body;
+
+  if (!username || !role) {
+    return res.status(400).send('Missing username');
+  }
+
+  if (!['user', 'host', 'admin'].includes(role)) {
+    return res.status(400).send('Invalid role, must be one of "user", "host", "admin"');
+  }
+
+  const user = await getOrCreateGlobalUser(username);
+  user.systemRole = role;
+
+  await redis.set(user.userId, JSON.stringify(user));
+
+  res.send({ ok: true, user });
 });
 
 const HTTP_PORT = process.env.HTTP_PORT || 8081;

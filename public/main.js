@@ -220,6 +220,8 @@ window.addEventListener('DOMContentLoaded', async () => {
       fullscreenBtn.onclick = () => {
         if (video.requestFullscreen) {
           video.requestFullscreen();
+        } else if (video.webkitEnterFullscreen) {
+          video.webkitEnterFullscreen(); // iOS Safari
         }
       };
 
@@ -275,21 +277,62 @@ window.addEventListener('DOMContentLoaded', async () => {
     ws.send(JSON.stringify(payload));
   }
 
+  window.addEventListener('orientationchange', () => {
+    if (!isLandscapeMobile()) {
+      hideLiveLandscape();
+      return;
+    }
+
+    if (live.classList.contains('show')) {
+      showLiveLandscape();
+    } else {
+      hideLiveLandscape();
+    }
+  });
+
+  function isLandscapeMobile() {
+    return window.matchMedia('(max-width: 768px) and (orientation: landscape)').matches;
+  }
+
+  function showLiveLandscape() {
+    // 第一帧：挂载状态
+    document.body.classList.add('show-live-landscape-prep');
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // 第二帧：触发 transition
+        document.body.classList.add('show-live-landscape');
+      });
+    });
+  }
+
+  function hideLiveLandscape() {
+    document.body.classList.remove('show-live-landscape');
+    setTimeout(() => {
+      document.body.classList.remove('show-live-landscape-prep');
+    }, 300);
+  }
+
   function toggleLive(show) {
-    if (isMobile()) {
-       live.classList.toggle('show', show);
+    if (isLandscapeMobile()) {
+      if (show) {
+        showLiveLandscape();
+        toggleBtn.textContent = "❌";
+      } else {
+        hideLiveLandscape();
+        toggleBtn.textContent = "🎬";
+      }
+      return;
     }
-    else {
-        const liveWidth = 70;
-        if (show) {
-          meeting.style.width = `${100 - liveWidth}%`;
-          live.classList.add("show");
-        } else {
-          meeting.style.width = "100%";
-          live.classList.remove("show");
-        }
+
+    // ===== 竖屏 / 桌面 =====
+    if (show) {
+      live.classList.add("show");
+      toggleBtn.textContent = "❌";
+    } else {
+      live.classList.remove("show");
+      toggleBtn.textContent = "🎬";
     }
-     toggleBtn.textContent = show ? "❌" : "🎬";
   }
 
   // ===== 7. 普通参会者禁止操作 =====

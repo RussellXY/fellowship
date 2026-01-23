@@ -1,114 +1,275 @@
-/* ===== 通用 ===== */
-#container {
-  position: relative;
+/* =====================================================
+   Reset & Base
+===================================================== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
   width: 100%;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   background: #000;
+  -webkit-text-size-adjust: 100%;
 }
 
-/* ===== Meet ===== */
-#meeting {
+#container {
+  display: flex;
   width: 100%;
-  height: 100%;
-  transition: width 0.35s ease, height 0.35s ease;
+  height: 100vh;
+  background: #000;
 }
 
-/* ===== Live（默认桌面端行为） ===== */
-#live {
-  position: absolute;
-  top: 0;
-  right: 0;
+/* =====================================================
+   Desktop Layout
+===================================================== */
+
+#container.desktop {
+  flex-direction: row;
+}
+
+/* Meet */
+#meeting {
+  flex: 1;
   height: 100%;
+  background: #000;
+}
+
+/* Live（桌面侧边） */
+#live {
   width: 70%;
+  height: 100%;
   background: #000;
 
-  transform: translateX(100%);
-  transition: transform 0.35s ease;
-
-  z-index: 10;
-  display: flex;
+  display: none;
   flex-direction: column;
 }
 
 #live.show {
-  transform: translateX(0);
+  display: flex;
 }
+
+/* =====================================================
+   Player & Controls
+===================================================== */
 
 #player {
   flex: 1;
   width: 100%;
   height: 100%;
+  background: #000;
 }
 
-/* ===== 控制区 ===== */
 #controls {
+  flex-shrink: 0;
+  height: 56px;
+
   display: flex;
   justify-content: space-around;
-  padding: 6px;
-  background: rgba(0,0,0,0.85);
+  align-items: center;
+
+  background: #111;
+  color: #fff;
+
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* ===== toggle 按钮（桌面） ===== */
+/* =====================================================
+   Floating Toggle Button
+===================================================== */
+
 #toggle-live {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  right: 16px;
+  bottom: 80px; /* 避开 Jitsi leave */
 
-  z-index: 1000;
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  min-height: 56px;
 
   border-radius: 50%;
-  background-color: #007bff;
-  color: white;
-  border: none;
-  cursor: pointer;
-  font-size: 22px;
 
   display: flex;
   align-items: center;
   justify-content: center;
+
+  background-color: #007bff;
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+
+  border: none;
+  cursor: pointer;
+  z-index: 2000;
+
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
-/* ========================= */
-/* ===== 移动端适配 ===== */
-/* ========================= */
+#toggle-live:active {
+  transform: scale(0.96);
+}
+
+/* =====================================================
+   Mobile Portrait（竖屏）
+===================================================== */
 
 @media (max-width: 768px) {
 
-  /* Live 改为底部区域（不盖住 meet） */
-  #live {
-    position: absolute;
-    left: 0;
-    bottom: 0;
+  #container {
+    flex-direction: column;
+  }
 
+  /* Meet 永远可见 */
+  #meeting {
+    flex: 1;
     width: 100%;
-    height: 40%;               /* 👈 直播占屏幕高度 */
+  }
 
-    transform: translateY(100%);
-    transition: transform 0.35s ease;
+  /* Live 作为“下方区域”，不盖住 Meet */
+  #live {
+    width: 100%;
+    height: 40vh;
 
-    border-top: 1px solid rgba(255,255,255,0.15);
+    display: none;
+    flex-direction: column;
+
+    border-top: 1px solid #222;
+    background: #000;
   }
 
   #live.show {
-    transform: translateY(0);
+    display: flex;
   }
 
-  /* Meet 被挤压，而不是被盖住 */
-  #meeting {
-    width: 100%;
-    height: 100%;
+  #controls {
+    font-size: 14px;
   }
 
-  #live.show ~ #meeting {
-    height: 60%;
-  }
-
-  /* toggle 按钮上移，避开 Jitsi Toolbar */
   #toggle-live {
-    bottom: 96px;   /* 👈 关键：避开 Leave / Toolbar */
+    bottom: 96px;
     right: 16px;
+  }
+}
+
+@media (max-width: 768px) and (orientation: landscape) {
+
+  /* ===== 容器 ===== */
+
+  #container {
+    width: 100%;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  #meeting,
+  #live {
+    width: 100%;
+    height: 100dvh;
+  }
+
+  /* =================================================
+     默认：Meet 显示
+  ================================================= */
+
+  #meeting {
+    opacity: 1;
+    transform: translateX(0);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+
+  /* =================================================
+     Live（初始：隐藏但可动画）
+  ================================================= */
+
+  #live {
+    position: fixed;
+    inset: 0;
+
+    display: flex;
+    flex-direction: column;
+
+    background: #000;
+
+    /* 关键：不要用 display:none */
+    opacity: 0;
+    transform: translateX(100%);
+    visibility: hidden;
+    pointer-events: none;
+
+    transition:
+      transform 0.3s ease,
+      opacity 0.3s ease,
+      visibility 0s linear 0.3s;
+
+    z-index: 999;
+  }
+
+  /* =================================================
+     横屏 + 显示 Live（动画态）
+  ================================================= */
+
+  body.show-live-landscape-prep #live {
+    visibility: visible;
+  }
+
+  body.show-live-landscape #meeting {
+    opacity: 0;
+    transform: translateX(-100%);
+    pointer-events: none;
+  }
+
+  body.show-live-landscape #live {
+    opacity: 1;
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+
+    transition-delay: 0s;
+  }
+
+  /* =================================================
+     播放器 & Controls（关键修复）
+  ================================================= */
+
+  #player {
+    /* 关键：不要 flex:1 吃光高度 */
+    flex: none;
+    width: 100%;
+    height: calc(100dvh - 56px - env(safe-area-inset-bottom));
+    background: #000;
+  }
+
+  #controls {
+    flex-shrink: 0;
+    height: 56px;
+
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+
+    background: #111;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* =================================================
+     Toggle Button
+  ================================================= */
+
+  #toggle-live {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+
+    font-size: 22px;
+    z-index: 2000;
   }
 }

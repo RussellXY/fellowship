@@ -1,7 +1,7 @@
 # ===== HTTP：只负责跳转 HTTPS =====
   server {
     listen 80;
-    server_name fellowship.ledbygrace.live;
+    server_name fellowshipofchrist.duckdns.org;
 
     location /.well-known/acme-challenge/ {
       root /usr/share/nginx/html;
@@ -15,10 +15,10 @@
   # ===== HTTPS 主站 =====
   server {
     listen 443 ssl;
-    server_name fellowship.ledbygrace.live;
+    server_name fellowshipofchrist.duckdns.org;
 
-    ssl_certificate     /etc/letsencrypt/live/fellowship.ledbygrace.live/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/fellowship.ledbygrace.live/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/fellowshipofchrist.duckdns.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/fellowshipofchrist.duckdns.org/privkey.pem;
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;

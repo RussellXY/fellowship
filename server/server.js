@@ -54,6 +54,7 @@ async function getRoomState(roomId) {
     playing: false,
     currentTime: 0,
     showLive: false,
+    anchorAt: Date.now(),
     refreshAt: 0,
     hostCount: 0
   };
@@ -104,6 +105,16 @@ async function getOrCreateGlobalUser(username) {
   return user;
 }
 
+function getLiveCurrentTime(room) {
+  if (!room.playing) {
+    return room.currentTime;
+  }
+
+  const now = Date.now();
+  const elapsed = (now - room.anchorAt) / 1000; // ms → 秒
+  return room.currentTime + elapsed;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.static('../public'));
@@ -111,14 +122,6 @@ app.use(express.static('../public'));
 // ===== JaaS 配置 =====
 const APP_ID = 'vpaas-magic-cookie-20556988122d40bb94a9dfa6fd4437c7';
 const PRIVATE_KEY = fs.readFileSync('./fellowship.pk', 'utf8').trim();
-
-// ===== WebSocket 全局状态 =====
-let liveState = {
-  playing: false,
-  currentTime: 0,
-  showLive: false,
-  refreshAt: 0 // 时间戳，用来区分是否需要刷新
-};
 
 // ===== WebSocket Server =====
 const wss = new WebSocketServer({ port: 3001 });
@@ -235,21 +238,34 @@ wss.on('connection', async (ws, req) => {
       return;
     }
 
+    const state = await getRoomState(roomId);
+
+    if (data.type === 'sync-request') {
+      console.log('[Info] client sync reqeust');
+      state.currentTime = getLiveCurrentTime(state);
+      ws.send(JSON.stringify({
+        type: 'sync',
+        state
+      }));
+    }
+
     // 非主持人禁止控制
     if (ws.role !== 'host') return;
 
-    const state = await getRoomState(roomId);
-
     if (data.type === 'play') {
+      console.log('[INFO] PLAY')
       state.playing = true;
       state.currentTime = data.currentTime;
+      state.anchorAt = Date.now();
       await publishAndBroadcast(roomId, { type: 'play', currentTime: state.currentTime });
       await setRoomState(roomId, state);
     }
 
     if (data.type === 'pause') {
+      console.log('[INFO] PAUSE')
       state.playing = false;
       state.currentTime = data.currentTime;
+      state.anchorAt = Date.now();
       await publishAndBroadcast(roomId, { type: 'pause', currentTime: state.currentTime });
       await setRoomState(roomId, state);
     }

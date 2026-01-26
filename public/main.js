@@ -62,7 +62,6 @@ window.addEventListener('DOMContentLoaded', async () => {
       console.log('[WS] connected');
       wsConnecting = false;
       wsRetry = 0;
-      wsSend({ type: 'sync-response' });
     };
 
     ws.onmessage = e => {
@@ -109,12 +108,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     // ===== 播放 =====
     if (data.type === 'play') {
       suppressLocalEvent = true;
+      video.currentTime = data.currentTime;
 
-      if (typeof data.currentTime === 'number') {
-        video.currentTime = data.currentTime;
-      }
-
-      video.play();
+      video.play().catch(() => { });
 
       setTimeout(() => {
         suppressLocalEvent = false;
@@ -124,11 +120,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     // ===== 暂停 =====
     if (data.type === 'pause') {
       suppressLocalEvent = true;
-
-      if (typeof data.currentTime === 'number') {
-        video.currentTime = data.currentTime;
-      }
-
+      video.currentTime = data.currentTime;
       video.pause();
 
       setTimeout(() => {
@@ -158,12 +150,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       suppressLocalEvent = true;
 
       // 时间 & 播放状态
-      if (typeof data.state.currentTime === 'number') {
-        video.currentTime = data.state.currentTime;
-      }
+      video.currentTime = data.state.currentTime;
 
       if (data.state.playing) {
-        video.play();
+        video.play().catch(() => { });
       } else {
         video.pause();
       }
@@ -205,7 +195,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   api.addEventListener('participantRoleChanged', e => {
     console.log('Participant role changed: ', e);
     if (e.role === 'moderator') {
-      IS_HOST = true;
       allowLocalControl = true;
 
       // 显示主持人控制区
@@ -217,14 +206,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       // ===== 播放 =====
       playBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
-          wsSend({type: 'play', currentTime: video.currentTime});
+          wsSend({ type: 'play', currentTime: video.currentTime });
         }
       };
 
       // ===== 暂停 =====
       pauseBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
-          wsSend({type: 'pause', currentTime: video.currentTime});
+          wsSend({ type: 'pause', currentTime: video.currentTime });
         }
       };
 
@@ -232,7 +221,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       rewindBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
           const t = Math.max(video.currentTime - 10, 0);
-          wsSend({type: 'pause', currentTime: t });
+          wsSend({ type: 'pause', currentTime: t });
         }
       };
 
@@ -240,14 +229,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       forwardBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
           const t = video.currentTime + 10;
-          wsSend({type: 'pause', currentTime: t });
+          wsSend({ type: 'pause', currentTime: t });
         }
       };
 
       // ===== 刷新直播（HLS） =====
       refreshBtn.onclick = () => {
         if (ws?.readyState === WebSocket.OPEN) {
-          wsSend({type: 'refresh-live'});
+          wsSend({ type: 'refresh-live' });
         }
       };
     }
@@ -310,9 +299,16 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // ===== 7. 普通参会者禁止操作 =====
   let suppressLocalEvent = false;
-  video.addEventListener('play', () => {
-    if (!allowLocalControl || suppressLocalEvent) return;
 
+  video.addEventListener('play', () => {
+    if (suppressLocalEvent) return;
+
+    if (!allowLocalControl) {
+      wsSend({ type: 'sync-request' });
+      return;
+    }
+
+    // 主持人 + 用户手势
     wsSend({
       type: 'play',
       currentTime: video.currentTime
@@ -320,6 +316,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   video.addEventListener('pause', () => {
+    if (!allowLocalControl || suppressLocalEvent) return
+    
+    wsSend({
+          type: 'pause',
+          currentTime: video.currentTime
+        });
+  });
+
+  video.addEventListener('seeking', () => {
     if (!allowLocalControl || suppressLocalEvent) return;
 
     wsSend({
@@ -327,15 +332,6 @@ window.addEventListener('DOMContentLoaded', async () => {
       currentTime: video.currentTime
     });
   });
-
-  video.addEventListener('seeking', () => {
-  if (!allowLocalControl || suppressLocalEvent) return;
-
-  wsSend({
-    type: 'pause',
-    currentTime: video.currentTime
-  });
-});
 
   function showLiveTailwind() {
     // 竖屏：Y 轴 modal

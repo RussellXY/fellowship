@@ -15,9 +15,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   const toggleBtn = document.getElementById("toggle-live");
   const refreshBtn = document.getElementById('refreshBtn');
 
-  function isMobile() {
-    return window.matchMedia('(max-width: 768px)').matches;
-  }
+  const controls = document.getElementById('controls');
+
+  video.controls = true;
 
   // ===== 1. 获取 token =====
   const tokenRes = await fetch(`/api/get-token?room=${ROOM_NAME}&name=${USER_NAME}`);
@@ -106,39 +106,75 @@ window.addEventListener('DOMContentLoaded', async () => {
   let lastRefreshAt = 0;
 
   function handleWSMessage(data) {
+    // ===== 播放 =====
     if (data.type === 'play') {
-      video.currentTime = data.currentTime;
+      suppressLocalEvent = true;
+
+      if (typeof data.currentTime === 'number') {
+        video.currentTime = data.currentTime;
+      }
+
       video.play();
+
+      setTimeout(() => {
+        suppressLocalEvent = false;
+      }, 0);
     }
 
+    // ===== 暂停 =====
     if (data.type === 'pause') {
-      video.currentTime = data.currentTime;
+      suppressLocalEvent = true;
+
+      if (typeof data.currentTime === 'number') {
+        video.currentTime = data.currentTime;
+      }
+
       video.pause();
+
+      setTimeout(() => {
+        suppressLocalEvent = false;
+      }, 0);
     }
 
+    // ===== 显示 / 隐藏 live =====
     if (data.type === 'toggle-live') {
       pendingShowLive = data.show;
-      // 只有进入会议，才立即应用
+
       if (hasJoinedMeeting) {
         toggleLive(data.show);
       }
     }
 
+    // ===== 刷新直播 =====
     if (data.type === 'refresh-live') {
       if (data.at && data.at <= lastRefreshAt) return;
+
       lastRefreshAt = data.at;
       refreshLiveStream();
     }
 
+    // ===== 全量同步（late join / reconnect）=====
     if (data.type === 'sync') {
-      video.currentTime = data.state.currentTime;
-      data.state.playing ? video.play() : video.pause();
-      pendingShowLive = data.state.showLive;
+      suppressLocalEvent = true;
 
+      // 时间 & 播放状态
+      if (typeof data.state.currentTime === 'number') {
+        video.currentTime = data.state.currentTime;
+      }
+
+      if (data.state.playing) {
+        video.play();
+      } else {
+        video.pause();
+      }
+
+      // live 显示状态
+      pendingShowLive = data.state.showLive;
       if (hasJoinedMeeting && typeof data.state.showLive === 'boolean') {
         toggleLive(data.state.showLive);
       }
 
+      // HLS 刷新
       if (
         data.state.refreshAt &&
         data.state.refreshAt > lastRefreshAt
@@ -146,17 +182,15 @@ window.addEventListener('DOMContentLoaded', async () => {
         lastRefreshAt = data.state.refreshAt;
         refreshLiveStream();
       }
+
+      setTimeout(() => {
+        suppressLocalEvent = false;
+      }, 0);
     }
   }
 
   // ===== 4. HLS 播放 =====
-  const isDev =
-  location.hostname === 'localhost' ||
-  location.hostname === '127.0.0.1';
-
-  const liveUrl = isDev
-    ? 'http://ec2-13-124-131-156.ap-northeast-2.compute.amazonaws.com:8080/hls/stream.m3u8'
-    : '/live/hls/stream.m3u8';
+  const liveUrl = '/live/hls/stream.m3u8';
   let hls;
 
   if (Hls.isSupported()) {
@@ -174,17 +208,11 @@ window.addEventListener('DOMContentLoaded', async () => {
       IS_HOST = true;
       allowLocalControl = true;
 
+      // 显示主持人控制区
+      controls.classList.remove('hidden');
+
       // ===== UI 解锁 =====
       toggleBtn.style.display = "flex";
-      refreshBtn.style.display = "inline-block";
-
-      playBtn.style.display = "inline-block";
-      pauseBtn.style.display = "inline-block";
-      rewindBtn.style.display = "inline-block";
-      forwardBtn.style.display = "inline-block";
-      fullscreenBtn.style.display = "inline-block";
-
-      video.controls = true;
 
       // ===== 播放 =====
       playBtn.onclick = () => {
@@ -213,15 +241,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (ws?.readyState === WebSocket.OPEN) {
           const t = video.currentTime + 10;
           wsSend({type: 'pause', currentTime: t });
-        }
-      };
-
-      // ===== 直播全屏 =====
-      fullscreenBtn.onclick = () => {
-        if (video.requestFullscreen) {
-          video.requestFullscreen();
-        } else if (video.webkitEnterFullscreen) {
-          video.webkitEnterFullscreen(); // iOS Safari
         }
       };
 
@@ -254,8 +273,12 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // ===== 6. toggle 按钮 =====
   toggleBtn.addEventListener("click", () => {
-    const show = !live.classList.contains("show");
-    wsSend({type: "toggle-live", show});
+    // translate-y-full = live hidden (single source of truth)
+    const isHidden = live.classList.contains('translate-y-full');
+    wsSend({
+      type: 'toggle-live',
+      show: isHidden
+    });
   });
 
   function getUserName() {
@@ -277,70 +300,60 @@ window.addEventListener('DOMContentLoaded', async () => {
     ws.send(JSON.stringify(payload));
   }
 
-  window.addEventListener('orientationchange', () => {
-    if (!isLandscapeMobile()) {
-      hideLiveLandscape();
-      return;
-    }
-
-    if (live.classList.contains('show')) {
-      showLiveLandscape();
-    } else {
-      hideLiveLandscape();
-    }
-  });
-
-  function isLandscapeMobile() {
-    return window.matchMedia('(max-width: 768px) and (orientation: landscape)').matches;
-  }
-
-  function showLiveLandscape() {
-    // 第一帧：挂载状态
-    document.body.classList.add('show-live-landscape-prep');
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        // 第二帧：触发 transition
-        document.body.classList.add('show-live-landscape');
-      });
-    });
-  }
-
-  function hideLiveLandscape() {
-    document.body.classList.remove('show-live-landscape');
-    setTimeout(() => {
-      document.body.classList.remove('show-live-landscape-prep');
-    }, 300);
-  }
-
   function toggleLive(show) {
-    if (isLandscapeMobile()) {
-      if (show) {
-        showLiveLandscape();
-        toggleBtn.textContent = "❌";
-      } else {
-        hideLiveLandscape();
-        toggleBtn.textContent = "🎬";
-      }
-      return;
-    }
-
-    // ===== 竖屏 / 桌面 =====
     if (show) {
-      live.classList.add("show");
-      toggleBtn.textContent = "❌";
+      showLiveTailwind();
     } else {
-      live.classList.remove("show");
-      toggleBtn.textContent = "🎬";
+      hideLiveTailwind();
     }
   }
 
   // ===== 7. 普通参会者禁止操作 =====
-  ['play', 'pause', 'seeking'].forEach(evt => {
-    video.addEventListener(evt, () => {
-      if (!allowLocalControl) {
-        wsSend({type: 'sync-request'});
-      }
+  let suppressLocalEvent = false;
+  video.addEventListener('play', () => {
+    if (!allowLocalControl || suppressLocalEvent) return;
+
+    wsSend({
+      type: 'play',
+      currentTime: video.currentTime
     });
   });
+
+  video.addEventListener('pause', () => {
+    if (!allowLocalControl || suppressLocalEvent) return;
+
+    wsSend({
+      type: 'pause',
+      currentTime: video.currentTime
+    });
+  });
+
+  video.addEventListener('seeking', () => {
+  if (!allowLocalControl || suppressLocalEvent) return;
+
+  wsSend({
+    type: 'pause',
+    currentTime: video.currentTime
+  });
+});
+
+  function showLiveTailwind() {
+    // 竖屏：Y 轴 modal
+    live.classList.remove('translate-y-full');
+
+    // 横屏 / 桌面：X 轴 slide
+    live.classList.remove('md:translate-x-full');
+
+    toggleBtn.textContent = '❌';
+  }
+
+  function hideLiveTailwind() {
+    // 竖屏
+    live.classList.add('translate-y-full');
+
+    // 横屏 / 桌面
+    live.classList.add('md:translate-x-full');
+
+    toggleBtn.textContent = '🎬';
+  }
 });

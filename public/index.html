@@ -1,29 +1,98 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+  />
   <title>Fellowship</title>
-  <link rel="stylesheet" href="style.css" />
+
+  <!-- Tailwind CDN（开发期用，生产建议本地构建） -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    /* 只做一个安全补充：safe-area */
+    .pb-safe {
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  </style>
 </head>
-<body>
-  <div id="container">
-    <div id="meeting"></div>
-    <div id="live">
-      <video id="player" playsinline></video>
-      <div id="controls">
-        <button id="playBtn">播放</button>
-        <button id="pauseBtn">暂停</button>
-        <button id="rewindBtn">快退10秒</button>
-        <button id="forwardBtn">快进10秒</button>
-        <button id="refreshBtn">刷新直播</button>
-        <button id="fullscreenBtn">直播全屏</button>
+
+<body class="bg-black">
+
+  <!-- App Root -->
+  <div id="app" class="relative w-screen h-[100dvh]">
+
+    <!-- =====================
+         Meet（Jitsi 容器）
+         ❗ 永远不做动画
+         ❗ 永远 absolute
+    ====================== -->
+    <div
+      id="meeting"
+      class="absolute inset-0 bg-black z-10 pb-safe"
+    ></div>
+
+    <!-- =====================
+         Live（Owncast）
+         - 桌面 / 横屏：右侧滑入
+         - 竖屏：底部 modal sheet
+    ====================== -->
+    <div
+      id="live"
+      class="
+        fixed z-20 bg-black flex flex-col
+
+        /* 默认隐藏 */
+        translate-y-full md:translate-y-0 md:translate-x-full
+        transition-transform duration-300 ease-out
+
+        /* 尺寸 */
+        inset-x-0 bottom-0 h-[60vh]
+        md:inset-y-0 md:right-0 md:left-auto md:h-full md:w-[70vw]
+      "
+    >
+      <!-- Player -->
+      <video
+        id="player"
+        playsinline
+        class="w-full flex-1 bg-black object-contain"
+      ></video>
+
+      <!-- Controls -->
+      <div
+        id="controls"
+        class="hidden h-14 flex items-center justify-around bg-neutral-900 text-white pb-safe"
+      >
+        <button id="playBtn" class="host-only">播放</button>
+        <button id="pauseBtn" class="host-only">暂停</button>
+        <button id="rewindBtn" class="host-only">快退10秒</button>
+        <button id="forwardBtn" class="host-only">快进10秒</button>
+        <button id="refreshBtn" class="host-only">刷新直播</button>
       </div>
     </div>
+
+    <!-- =====================
+         Floating Toggle Button
+    ====================== -->
+    <button
+      id="toggle-live"
+      class="
+        fixed z-30 hidden
+        right-4 bottom-20
+        w-14 h-14 rounded-full
+        bg-blue-600 text-white text-xl
+        flex items-center justify-center
+        shadow-lg active:scale-95
+      "
+    >
+      🎬
+    </button>
+
   </div>
 
-  <button id="toggle-live" style="display:none;">🎬</button>
-
+  <!-- Scripts -->
   <script src="https://meet.jit.si/external_api.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script src="main.js"></script>

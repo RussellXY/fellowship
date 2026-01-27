@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 你现在 index.html 里的这段 style，建议放这里 */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}

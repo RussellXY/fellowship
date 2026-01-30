@@ -1,4 +1,5 @@
 fellowship.pk
+key.env
 certs/
 
 .DS_Store

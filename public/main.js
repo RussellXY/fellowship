@@ -3,9 +3,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   let hasJoinedMeeting = false;
   let pendingShowLive = null;
 
-  const APP_ID = "vpaas-magic-cookie-20556988122d40bb94a9dfa6fd4437c7"
+  const APP_ID = "vpaas-magic-cookie-7aa44c342e744b7386a1563d686a04bf"
   const ROOM_NAME = "Fellowship";
-  const USER_NAME = getUserName();;
+  const USER_NAME = await getUserName();;
 
   let allowLocalControl = false;
 
@@ -270,15 +270,87 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  function getUserName() {
-    let name = localStorage.getItem("fellowship_username");
-
-    if (!name) {
-      name = prompt("请输入你的名字") || "Guest";
-      localStorage.setItem("fellowship_username", name);
+  function validateUsername(username) {
+    if (!username) {
+      return '用户名不能为空';
     }
 
-    return name;
+    if (!/^[A-Za-z]+$/.test(username)) {
+      return '用户名只能包含英文字母（A-Z / a-z）';
+    }
+
+    return null; // 合法
+  }
+
+  async function getUserName() {
+    while (true) {
+      let name = localStorage.getItem('fellowship_username');
+
+      if (!name) {
+        name = prompt('请输入你的用户名（仅限英文字母）');
+      }
+
+      if (!name) {
+        alert('用户名不能为空');
+        continue;
+      }
+
+      name = name.trim();
+
+      // ① 前端格式校验
+      const err = validateUsername(name);
+      if (err) {
+        alert(err);
+        localStorage.removeItem('fellowship_username');
+        continue;
+      }
+
+      // ② 请求后端验证（不真正进会，只验证）
+      const ok = await verifyUsernameWithServer(name);
+      if (!ok) {
+        localStorage.removeItem('fellowship_username');
+        continue;
+      }
+
+      // ③ 一切通过，保存
+      localStorage.setItem('fellowship_username', name);
+      return name;
+    }
+  }
+
+  async function verifyUsernameWithServer(username) {
+    try {
+      showLoading('正在验证用户名…');
+
+      const res = await fetch(
+        `/api/get-token?room=test&name=${encodeURIComponent(username)}`
+      );
+
+      hideLoading();
+
+      if (res.ok) {
+        return true;
+      }
+
+      const data = await res.json().catch(() => ({}));
+
+      if (data.error === 'USERNAME_NOT_ALLOWED') {
+        alert('❌ 用户名未注册，请联系管理员');
+        return false;
+      }
+
+      if (data.error === 'USERNAME_EMPTY') {
+        alert('❌ 用户名不能为空');
+        return false;
+      }
+
+      alert('服务器错误，请稍后再试');
+      return false;
+    } catch (e) {
+      hideLoading();
+      alert('无法连接服务器，请检查网络');
+      return false;
+    }
   }
 
   function wsSend(payload) {
@@ -295,6 +367,23 @@ window.addEventListener('DOMContentLoaded', async () => {
     } else {
       hideLiveTailwind();
     }
+  }
+
+  function showLoading(text = '正在处理，请稍候…') {
+    const el = document.getElementById('global-loading');
+    if (!el) return;
+
+    const msg = el.querySelector('div > div');
+    if (msg) msg.textContent = `⏳ ${text}`;
+
+    el.style.display = 'flex';
+  }
+
+  function hideLoading() {
+    const el = document.getElementById('global-loading');
+    if (!el) return;
+
+    el.style.display = 'none';
   }
 
   // ===== 7. 普通参会者禁止操作 =====

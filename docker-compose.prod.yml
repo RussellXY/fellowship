@@ -11,12 +11,21 @@ services:
       - NODE_ENV=production
       - HTTP_PORT=8081
       - REDIS_HOST=redis
+      - MONGO_URI=mongodb://mongo:27017
+      - MONGO_DB=fellowship
     depends_on:
       - redis
+      - mongo
 
   redis:
     image: redis:7-alpine
     restart: always
+  
+  mongo:
+    image: mongo:6
+    restart: always
+    volumes:
+      - mongo_data:/data/db
 
   nginx:
     image: nginx:alpine
@@ -30,3 +39,6 @@ services:
       - "443:443"
     depends_on:
       - server
+
+volumes:
+  mongo_data:

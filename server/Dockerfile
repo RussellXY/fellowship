@@ -7,6 +7,7 @@ RUN npm ci --only=production
 
 COPY server.js .
 COPY fellowship.pk .
+COPY key.env .
 
 ENV NODE_ENV=production
 

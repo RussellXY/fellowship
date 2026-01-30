@@ -84,6 +84,31 @@
 
   </div>
 
+  <!-- Global Loading Overlay -->
+  <div
+    id="global-loading"
+    style="
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      font-size: 16px;
+    "
+  >
+    <div>
+      <div style="margin-bottom: 12px; text-align: center;">
+        ⏳ 正在验证用户名…
+      </div>
+      <div style="font-size: 12px; opacity: 0.8; text-align: center;">
+        请稍候
+      </div>
+    </div>
+  </div>
+
   <!-- Scripts -->
   <script src="https://meet.jit.si/external_api.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>

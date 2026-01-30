@@ -5,6 +5,58 @@ import jwt from 'jsonwebtoken';
 import { WebSocketServer } from 'ws';
 import Redis from 'ioredis';
 import crypto from 'crypto';
+import { MongoClient } from 'mongodb';
+import path from 'path';
+
+function loadLocalEnv(filename = 'key.env') {
+  const filePath = path.resolve(process.cwd(), filename);
+
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`[FATAL] Missing ${filename} file`);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf8');
+
+  const env = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) continue;
+
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim();
+
+    env[key] = value;
+  }
+
+  return env;
+}
+
+const localEnv = loadLocalEnv('key.env');
+const ADMIN_TOKEN = localEnv.ADMIN_TOKEN;
+
+if (!ADMIN_TOKEN) {
+  throw new Error('[FATAL] ADMIN_TOKEN not found in key.env');
+}
+
+// ===== MongoDB =====
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongo:27017';
+const MONGO_DB = process.env.MONGO_DB || 'fellowship';
+
+const mongoClient = new MongoClient(MONGO_URI);
+await mongoClient.connect();
+
+const mongoDb = mongoClient.db(MONGO_DB);
+const allowedUsersCol = mongoDb.collection('allowed_users');
+
+const usersCol = mongoDb.collection('users');
+await usersCol.createIndex({ userId: 1 }, { unique: true });
+await usersCol.createIndex({ username: 1 });
+
+// username 唯一索引（只 trim，不 lowercase）
+await allowedUsersCol.createIndex({ username: 1 }, { unique: true });
 
 const ROOM_TTL_SECONDS = 60 * 60 * 2; // 1 小时
 
@@ -73,6 +125,30 @@ async function setRoomState(roomId, state) {
   );
 }
 
+function normalizeUsername(username) {
+  if (typeof username !== 'string') return '';
+  return username.trim();
+}
+
+async function assertUsernameAllowed(username) {
+  const normalized = normalizeUsername(username);
+
+  if (!normalized) {
+    throw new Error('USERNAME_EMPTY');
+  }
+
+  const record = await allowedUsersCol.findOne({
+    username: normalized,
+    enabled: true
+  });
+
+  if (!record) {
+    throw new Error('USERNAME_NOT_ALLOWED');
+  }
+
+  return record;
+}
+
 function generateHashKey(value) {
   const normalized = value.trim().toLowerCase();
   return crypto
@@ -88,20 +164,25 @@ function globalUserID(username) {
 }
 
 async function getOrCreateGlobalUser(username) {
-  const userId = globalUserID(username);
-  const raw = await redis.get(userId);
+  await assertUsernameAllowed(username);
 
-  if (raw) {
-    return JSON.parse(raw);
+  const userId = globalUserID(username);
+
+  let user = await usersCol.findOne({ userId });
+
+  if (user) {
+    return user;
   }
 
-  const user = {
-    userId: userId,
-    username,
-    systemRole: 'user' // 默认不是主持人
+  user = {
+    userId,
+    username: normalizeUsername(username),
+    systemRole: 'user',
+    createdAt: new Date(),
+    updatedAt: new Date()
   };
 
-  await redis.set(userId, JSON.stringify(user));
+  await usersCol.insertOne(user);
   return user;
 }
 
@@ -120,7 +201,8 @@ app.use(cors());
 app.use(express.static('../public'));
 
 // ===== JaaS 配置 =====
-const APP_ID = 'vpaas-magic-cookie-20556988122d40bb94a9dfa6fd4437c7';
+const APP_ID = 'vpaas-magic-cookie-7aa44c342e744b7386a1563d686a04bf';
+const APP_ID_EXTRA = '29e98e'
 const PRIVATE_KEY = fs.readFileSync('./fellowship.pk', 'utf8').trim();
 
 // ===== WebSocket Server =====
@@ -344,7 +426,19 @@ app.get('/api/get-token', async (req, res) => {
   }
 
   // 获取全局用户
-  const user = await getOrCreateGlobalUser(name);
+  let user;
+  try {
+    user = await getOrCreateGlobalUser(name);
+  } catch (err) {
+    if (err.message === 'USERNAME_NOT_ALLOWED') {
+      return res.status(403).json({ error: 'USERNAME_NOT_ALLOWED' });
+    }
+    if (err.message === 'USERNAME_EMPTY') {
+      return res.status(400).json({ error: 'USERNAME_EMPTY' });
+    }
+    console.error(err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
 
   // 是否给 JaaS moderator，只取决于 systemRole
   const moderator = user.systemRole === 'host' || user.systemRole === 'admin';
@@ -365,7 +459,7 @@ app.get('/api/get-token', async (req, res) => {
   };
 
   const header = {
-    kid: `${APP_ID}/f6bce1`,
+    kid: `${APP_ID}/${APP_ID_EXTRA}`,
     alg: 'RS256',
     typ: 'JWT'
   };
@@ -378,23 +472,103 @@ app.get('/api/get-token', async (req, res) => {
   res.send(token);
 });
 
-app.post('/api/admin/set-role', express.json(), async (req, res) => {
+function requireAdmin(req, res, next) {
+  const token = req.headers['x-admin-token'];
+  if (token !== ADMIN_TOKEN) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+  next();
+}
+
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+  const list = await allowedUsersCol.find({}).toArray();
+  res.json(list);
+});
+
+app.post('/api/admin/users', requireAdmin, express.json(), async (req, res) => {
+  const username = normalizeUsername(req.body.username);
+
+  if (!username) {
+    return res.status(400).json({ error: 'USERNAME_EMPTY' });
+  }
+
+  try {
+    await allowedUsersCol.insertOne({
+      username,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  } catch (e) {
+    if (e.code === 11000) {
+      return res.status(409).json({ error: 'USERNAME_EXISTS' });
+    }
+    throw e;
+  }
+
+  res.json({ ok: true });
+});
+
+app.put('/api/admin/users/:username', requireAdmin, express.json(), async (req, res) => {
+  const username = normalizeUsername(req.params.username);
+  const enabled = !!req.body.enabled;
+
+  await allowedUsersCol.updateOne(
+    { username },
+    {
+      $set: {
+        enabled,
+        updatedAt: new Date()
+      }
+    }
+  );
+
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/users/:username', requireAdmin, async (req, res) => {
+  const username = normalizeUsername(req.params.username);
+  await allowedUsersCol.deleteOne({ username });
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/set-role', express.json(), requireAdmin, async (req, res) => {
   const { username, role } = req.body;
 
   if (!username || !role) {
-    return res.status(400).send('Missing username');
+    return res.status(400).json({ error: 'MISSING_PARAMS' });
   }
 
   if (!['user', 'host', 'admin'].includes(role)) {
-    return res.status(400).send('Invalid role, must be one of "user", "host", "admin"');
+    return res.status(400).json({ error: 'INVALID_ROLE' });
   }
 
-  const user = await getOrCreateGlobalUser(username);
-  user.systemRole = role;
+  // 先确保 username 在白名单
+  await assertUsernameAllowed(username);
 
-  await redis.set(user.userId, JSON.stringify(user));
+  const normalized = normalizeUsername(username);
+  const userId = globalUserID(normalized);
 
-  res.send({ ok: true, user });
+  const result = await usersCol.updateOne(
+    { userId },
+    {
+      $set: {
+        username: normalized,
+        systemRole: role,
+        updatedAt: new Date()
+      },
+      $setOnInsert: {
+        createdAt: new Date()
+      }
+    },
+    { upsert: true }   // 👈 关键
+  );
+
+  res.json({
+    ok: true,
+    userId,
+    role
+  });
 });
 
 const HTTP_PORT = process.env.HTTP_PORT || 8081;

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fellowship Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0f0f0f;
+      color: #e5e5e5;
+      margin: 0;
+      padding: 24px;
+    }
+
+    h1 {
+      margin-top: 0;
+    }
+
+    section {
+      margin-bottom: 24px;
+      padding: 16px;
+      background: #1b1b1b;
+      border-radius: 8px;
+    }
+
+    input, select, button {
+      padding: 8px 10px;
+      margin-right: 8px;
+      background: #111;
+      border: 1px solid #333;
+      color: #fff;
+      border-radius: 4px;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #2563eb;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+
+    th, td {
+      padding: 8px;
+      border-bottom: 1px solid #333;
+      text-align: left;
+    }
+
+    th {
+      color: #9ca3af;
+    }
+
+    .error {
+      color: #f87171;
+      margin-top: 8px;
+    }
+
+    .ok {
+      color: #4ade80;
+      margin-top: 8px;
+    }
+
+    .actions button {
+      margin-right: 6px;
+    }
+
+    .disabled {
+      opacity: 0.5;
+    }
+
+    #loading {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>🎛 Fellowship Admin</h1>
+
+<!-- ===== Admin Token ===== -->
+<section>
+  <h3>管理员 Token</h3>
+  <input id="tokenInput" type="password" placeholder="x-admin-token" />
+  <button onclick="saveToken()">保存</button>
+  <div id="tokenMsg"></div>
+</section>
+
+<!-- ===== Add User ===== -->
+<section>
+  <h3>添加用户</h3>
+  <input id="newUsername" placeholder="Username (A-Z / a-z)" />
+  <button onclick="addUser()">Add</button>
+  <div id="addMsg"></div>
+</section>
+
+<!-- ===== Users Table ===== -->
+<section>
+  <h3>允许用户列表</h3>
+  <button onclick="loadUsers()">🔄 Refresh</button>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Enabled</th>
+        <th>Role</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="userTable"></tbody>
+  </table>
+
+  <div id="listMsg"></div>
+</section>
+
+<!-- ===== Loading ===== -->
+<div id="loading">
+  <div>⏳ Processing...</div>
+</div>
+
+<script>
+  const API_BASE = '/api/admin';
+  let ADMIN_TOKEN = localStorage.getItem('admin_token') || '';
+
+  const loadingEl = document.getElementById('loading');
+
+  function showLoading() {
+    loadingEl.style.display = 'flex';
+  }
+
+  function hideLoading() {
+    loadingEl.style.display = 'none';
+  }
+
+  function authHeaders() {
+    return {
+      'Content-Type': 'application/json',
+      'x-admin-token': ADMIN_TOKEN
+    };
+  }
+
+  function saveToken() {
+    const v = document.getElementById('tokenInput').value.trim();
+    if (!v) return;
+    ADMIN_TOKEN = v;
+    localStorage.setItem('admin_token', v);
+    document.getElementById('tokenMsg').textContent = '✅ Token saved';
+    loadUsers();
+  }
+
+  async function api(method, url, body) {
+    showLoading();
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: authHeaders(),
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const data = await res.json().catch(() => ({}));
+      hideLoading();
+      if (!res.ok) throw data;
+      return data;
+    } catch (e) {
+      hideLoading();
+      throw e;
+    }
+  }
+
+  function validateUsername(name) {
+    return /^[A-Za-z]+$/.test(name);
+  }
+
+  async function loadUsers() {
+    const msg = document.getElementById('listMsg');
+    msg.textContent = '';
+    try {
+      const users = await api('GET', `${API_BASE}/users`);
+      const tbody = document.getElementById('userTable');
+      tbody.innerHTML = '';
+
+      users.forEach(u => {
+        const tr = document.createElement('tr');
+        tr.className = u.enabled ? '' : 'disabled';
+
+        tr.innerHTML = `
+          <td>${u.username}</td>
+          <td>${u.enabled}</td>
+          <td>${u.role || 'user'}</td>
+          <td class="actions">
+            <button onclick="setRole('${u.username}','user')">User</button>
+            <button onclick="setRole('${u.username}','host')">Host</button>
+            <button onclick="setRole('${u.username}','admin')">Admin</button>
+            <button onclick="toggleUser('${u.username}',${!u.enabled})">
+              ${u.enabled ? 'Disable' : 'Enable'}
+            </button>
+            <button onclick="deleteUser('${u.username}')">Delete</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    } catch (e) {
+      msg.textContent = e.error || 'Failed to load users';
+      msg.className = 'error';
+    }
+  }
+
+  async function addUser() {
+    const name = document.getElementById('newUsername').value.trim();
+    const msg = document.getElementById('addMsg');
+    msg.textContent = '';
+
+    if (!validateUsername(name)) {
+      msg.textContent = '❌ Only A–Z / a–z allowed';
+      msg.className = 'error';
+      return;
+    }
+
+    try {
+      await api('POST', `${API_BASE}/users`, { username: name });
+      msg.textContent = '✅ User added';
+      msg.className = 'ok';
+      document.getElementById('newUsername').value = '';
+      loadUsers();
+    } catch (e) {
+      msg.textContent = e.error || 'Add failed';
+      msg.className = 'error';
+    }
+  }
+
+  async function toggleUser(name, enabled) {
+    try {
+      await api('PUT', `${API_BASE}/users/${name}`, { enabled });
+      loadUsers();
+    } catch (e) {
+      alert(e.error || 'Operation failed');
+    }
+  }
+
+  async function deleteUser(name) {
+    if (!confirm(`Delete user ${name}?`)) return;
+    try {
+      await api('DELETE', `${API_BASE}/users/${name}`);
+      loadUsers();
+    } catch (e) {
+      alert(e.error || 'Delete failed');
+    }
+  }
+
+  async function setRole(name, role) {
+    try {
+      await api('POST', `${API_BASE}/set-role`, { username: name, role });
+      loadUsers();
+    } catch (e) {
+      alert(e.error || 'Set role failed');
+    }
+  }
+
+  // auto-load
+  if (ADMIN_TOKEN) {
+    loadUsers();
+  }
+</script>
+
+</body>
+</html>

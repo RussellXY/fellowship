@@ -4,6 +4,8 @@ services:
       context: ./server
       dockerfile: Dockerfile
     restart: always
+    volumes:
+      - ./server/key.env:/app/key.env:ro
     ports:
       - "8081:8081"
       - "3001:3001"

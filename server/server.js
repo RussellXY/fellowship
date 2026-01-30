@@ -511,9 +511,17 @@ app.post('/api/admin/users', requireAdmin, express.json(), async (req, res) => {
 
 app.put('/api/admin/users/:username', requireAdmin, express.json(), async (req, res) => {
   const username = normalizeUsername(req.params.username);
-  const enabled = !!req.body.enabled;
+  const enabled = req.body.enabled;
 
-  await allowedUsersCol.updateOne(
+  if (!username) {
+    return res.status(400).json({ error: 'USERNAME_EMPTY' });
+  }
+
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_ENABLED_VALUE' });
+  }
+
+  const result = await allowedUsersCol.updateOne(
     { username },
     {
       $set: {
@@ -523,12 +531,26 @@ app.put('/api/admin/users/:username', requireAdmin, express.json(), async (req, 
     }
   );
 
+  if (result.matchedCount === 0) {
+    return res.status(404).json({ error: 'USERNAME_NOT_FOUND' });
+  }
+
   res.json({ ok: true });
 });
 
 app.delete('/api/admin/users/:username', requireAdmin, async (req, res) => {
   const username = normalizeUsername(req.params.username);
-  await allowedUsersCol.deleteOne({ username });
+
+  if (!username) {
+    return res.status(400).json({ error: 'USERNAME_EMPTY' });
+  }
+
+  const result = await allowedUsersCol.deleteOne({ username });
+
+  if (result.deletedCount === 0) {
+    return res.status(404).json({ error: 'USERNAME_NOT_FOUND' });
+  }
+
   res.json({ ok: true });
 });
 

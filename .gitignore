@@ -1,5 +1,5 @@
 fellowship.pk
 key.env
 certs/
-
+admin.htpasswd
 .DS_Store

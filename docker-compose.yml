@@ -34,6 +34,7 @@ services:
       - ./public:/usr/share/nginx/html
       - ./certs:/etc/nginx/certs:ro
       - ./nginx/default.dev.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/admin.htpasswd:/etc/nginx/admin.htpasswd:ro
     ports:
       - "80:80"
       - "443:443"

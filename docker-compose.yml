@@ -1,10 +1,12 @@
 services:
   server:
+    container_name: server
     build:
       context: ./server
       dockerfile: Dockerfile.dev
     volumes:
       - ./server:/app
+      - ./.data/uploads:/data/uploads
     ports:
       - "8081:8081"
       - "3001:3001"
@@ -14,20 +16,24 @@ services:
       - REDIS_HOST=redis
       - MONGO_URI=mongodb://mongo:27017     
       - MONGO_DB=fellowship
+      - RTMP_URL=rtmp://13.124.131.156:1935/live
     depends_on:
       - redis
       - mongo
   redis:
+    container_name: redis
     image: redis:7-alpine
     restart: always
   
-  mongo:                                  
+  mongo:
+    container_name: mongo                     
     image: mongo:6
     restart: always
     volumes:
       - mongo_data:/data/db
 
   nginx:
+    container_name: nginx
     image: nginx:alpine
     restart: always
     volumes:

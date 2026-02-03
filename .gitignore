@@ -3,3 +3,6 @@ key.env
 certs/
 admin.htpasswd
 .DS_Store
+.data
+
+node_modules/

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>推流控制台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0f0f0f;
+            color: #e5e5e5;
+            padding: 24px;
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        section {
+            background: #1b1b1b;
+            padding: 16px;
+            margin-bottom: 16px;
+            border-radius: 8px;
+        }
+
+        input,
+        select,
+        button {
+            padding: 8px;
+            background: #111;
+            color: #fff;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #2563eb;
+        }
+
+        ul {
+            list-style: none;
+            padding-left: 0;
+            margin: 8px 0 0 0;
+        }
+
+        li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid #2a2a2a;
+        }
+
+        li:last-child {
+            border-bottom: none;
+        }
+
+        .small {
+            color: #aaa;
+            font-size: 12px;
+        }
+
+        .status {
+            white-space: pre-wrap;
+            background: #000;
+            padding: 12px;
+            min-height: 48px;
+        }
+
+        .error {
+            color: #f87171;
+        }
+
+        .ok {
+            color: #4ade80;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>📡 推流控制台</h1>
+
+    <!-- 播放列表 + 添加文件 -->
+    <section>
+        <h3>播放列表</h3>
+
+        <div class="toolbar">
+            <input type="file" id="fileInput" multiple />
+            <span class="small">支持多选 / 多次添加，自动去重</span>
+        </div>
+
+        <ul id="playlist"></ul>
+        <p id="emptyTip" class="small">尚未添加任何视频</p>
+    </section>
+
+    <!-- 推流模式 -->
+    <section>
+        <h3>推流模式</h3>
+        <select id="mode">
+            <option value="playlist">按播放列表顺序播放</option>
+            <option value="loop">单视频循环播放</option>
+        </select>
+
+        <div id="loopSelector" class="hidden" style="margin-top:8px;">
+            循环播放：
+            <select id="loopTarget"></select>
+        </div>
+    </section>
+
+    <!-- 控制 -->
+    <section>
+        <button onclick="start()">▶ 开始推流</button>
+        <button onclick="stop()">⏹ 停止推流</button>
+    </section>
+
+    <!-- 状态 -->
+    <section>
+        <h3>状态</h3>
+        <div id="status" class="status">空闲</div>
+        <!-- 转码进度区域 -->
+        <div id="transcodeStatus" style="display:none; margin-top:12px;">
+            <div id="transcodeText" style="margin-bottom:6px; color:#ccc;">
+                正在转码…
+            </div>
+
+            <div style="width:100%; background:#333; height:8px; border-radius:4px;">
+                <div id="transcodeBar" style="
+        width:0%;
+        height:100%;
+        background:#4ade80;
+        border-radius:4px;
+        transition: width 0.2s linear;
+      "></div>
+            </div>
+            <div style="margin-top:10px;">
+                <button onclick="cancelTranscode()">⛔ 取消转码</button>
+            </div>
+        </div>
+    </section>
+
+    <script type="module" src="./stream.js"></script>
+
+</body>
+
+</html>

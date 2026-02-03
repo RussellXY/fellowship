@@ -6,6 +6,7 @@ services:
     restart: always
     volumes:
       - ./server/key.env:/app/key.env:ro
+      - /srv/fellowship/uploads:/data/uploads
     ports:
       - "8081:8081"
       - "3001:3001"
@@ -15,6 +16,7 @@ services:
       - REDIS_HOST=redis
       - MONGO_URI=mongodb://mongo:27017
       - MONGO_DB=fellowship
+      - RTMP_URL=rtmp://172.31.45.177:1935/live
     depends_on:
       - redis
       - mongo

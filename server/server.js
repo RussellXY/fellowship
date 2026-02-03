@@ -8,6 +8,12 @@ import crypto from 'crypto';
 import { MongoClient } from 'mongodb';
 import path from 'path';
 
+import multer from 'multer';
+import { spawn } from 'child_process';
+
+let currentFfmpeg = null;
+let currentStreamSession = null;
+
 function loadLocalEnv(filename = 'key.env') {
   const filePath = path.resolve(process.cwd(), filename);
 
@@ -39,6 +45,61 @@ const ADMIN_TOKEN = localEnv.ADMIN_TOKEN;
 
 if (!ADMIN_TOKEN) {
   throw new Error('[FATAL] ADMIN_TOKEN not found in key.env');
+}
+
+// ===== File Upload =====
+const UPLOAD_ROOT = '/data/uploads';
+const CACHE_PATH = 'cached'
+const CACHE_DIR = path.join(UPLOAD_ROOT, CACHE_PATH);
+const CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 7 天
+
+fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+async function getOrCreateCachedFile(fingerprint,
+  uploadedPath,
+  originalName) {
+  if (!fingerprint) {
+    throw new Error('MISSING_FINGERPRINT');
+  }
+
+  if (!uploadedPath) {
+    throw new Error('MISSING_UPLOADED_PATH');
+  }
+
+  const cachedPath = path.join(CACHE_DIR, fingerprint + '.mp4');
+
+  // ===== 1. 已存在缓存 =====
+  const record = await mongoDb
+    .collection('transcoded_videos')
+    .findOne({ fingerprint });
+
+  if (record && fs.existsSync(record.path)) {
+    return record.path;
+  }
+
+  // ===== 2. 不存在 → 创建缓存 =====
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+  // 这里假设：tempPath 已经是
+  // - 客户端转码后的文件
+  // - 或服务器转码完成的文件
+  fs.renameSync(uploadedPath, cachedPath);
+
+  // ===== 3. 现在，缓存“正式成立” =====
+  await mongoDb.collection('transcoded_videos').updateOne(
+    { fingerprint },
+    {
+      $set: {
+        fingerprint,
+        path: cachedPath,
+        originalName,
+        createdAt: new Date()
+      }
+    },
+    { upsert: true }
+  );
+
+  return cachedPath;
 }
 
 // ===== MongoDB =====
@@ -130,6 +191,10 @@ function normalizeUsername(username) {
   return username.trim();
 }
 
+function printLogWithObject(object) {
+  console.log(JSON.stringify(object, null, 2));
+}
+
 async function assertUsernameAllowed(username) {
   const normalized = normalizeUsername(username);
 
@@ -198,6 +263,12 @@ function getLiveCurrentTime(room) {
 
 const app = express();
 app.use(cors());
+// ===== COOP / COEP 只对 /stream 生效 =====
+app.use('/stream', (req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  next();
+});
 app.use(express.static('../public'));
 
 // ===== JaaS 配置 =====
@@ -206,6 +277,7 @@ const APP_ID_EXTRA = '29e98e'
 const PRIVATE_KEY = fs.readFileSync('./fellowship.pk', 'utf8').trim();
 
 // ===== WebSocket Server =====
+const adminClients = new Set();
 const wss = new WebSocketServer({ port: 3001 });
 
 await redisSub.subscribe(globalChannel());
@@ -218,11 +290,12 @@ redisSub.on('message', (channel, message) => {
 });
 
 // 心跳（30 秒）
-const HEARTBEAT_INTERVAL = 30000;
+const HEARTBEAT_INTERVAL = 60000;
 
 const heartbeat = setInterval(() => {
   wss.clients.forEach(ws => {
     if (ws.isAlive === false) {
+      console.log(`[INFO] terminal websocket connection ws: ${ws}`);
       return ws.terminate();
     }
     ws.isAlive = false;
@@ -259,7 +332,51 @@ async function broadcastRoomUsers(roomId) {
   });
 }
 
+function broadcastToAdmins(payload) {
+  const msg = JSON.stringify(payload);
+
+  for (const ws of adminClients) {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(msg);
+    }
+  }
+}
+
 wss.on('connection', async (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+
+  // ===== stream admin ws =====
+  if (url.pathname === '/ws/stream') {
+    console.log('[WS] stream page connected');
+    adminClients.add(ws);
+
+    // ✅ 参与心跳
+    ws.isAlive = true;
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
+
+    ws.on('close', () => {
+      adminClients.delete(ws);
+    });
+
+    ws.on('message', async raw => {
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return;
+      }
+
+      if (data.type === 'keepalive') {
+        // 什么都不用做，只要让 nginx 看到“有数据”
+        return;
+      }
+    });
+
+    return;
+  }
+
   console.log('[WS] connected');
   // ===== 心跳初始化 =====
   ws.isAlive = true;
@@ -268,7 +385,6 @@ wss.on('connection', async (ws, req) => {
   });
 
   // ===== 解析 room =====
-  const url = new URL(req.url, `http://${req.headers.host}`);
   const roomId = url.searchParams.get('room');
   const username = url.searchParams.get('name');
 
@@ -285,7 +401,7 @@ wss.on('connection', async (ws, req) => {
   ws.role = (user.systemRole === 'host' || user.systemRole === 'admin')
     ? 'host'
     : 'viewer';
-  
+
   if (ws.role === 'host') {
     const state = await getRoomState(roomId);
     state.hostCount += 1;
@@ -329,6 +445,12 @@ wss.on('connection', async (ws, req) => {
         type: 'sync',
         state
       }));
+    }
+
+    if (data.type === 'keepalive') {
+      console.log('receive keepalive message');
+      // 什么都不用做，只要让 nginx 看到“有数据”
+      return;
     }
 
     // 非主持人禁止控制
@@ -393,7 +515,7 @@ wss.on('connection', async (ws, req) => {
       if (state.hostCount <= 0) {
         state.showLive = false;
         state.playing = false;
-        
+
         // 当所有主持人都离开时，自动关闭live界面，如果不需要的话可以注释这一段内容
         await publishAndBroadcast(roomId, {
           type: 'toggle-live',
@@ -408,14 +530,114 @@ wss.on('connection', async (ws, req) => {
     if (!stillUsed) {
       await redis.del(roomKey(roomId));
     }
-
-
   });
 });
 
 // 进程退出时清理心跳
 process.on('SIGTERM', () => clearInterval(heartbeat));
 process.on('SIGINT', () => clearInterval(heartbeat));
+
+// ===== FFMPEG 接口 =====
+
+function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
+  const RTMP_URL = process.env.RTMP_URL;
+  if (!RTMP_URL) {
+    throw new Error('RTMP_URL not set');
+  }
+
+  const STREAM_KEY = 'BO#Dn2bTkCkSDhPgjchO0Dgm#hjd5U'
+
+  const rtmpUrl = `${RTMP_URL}/${STREAM_KEY}`;
+
+  let args;
+
+  if (mode === 'playlist') {
+    args = [
+      '-re',
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', playlistPath,
+    ];
+
+    args.push('-c', 'copy');
+    args.push('-f', 'flv', rtmpUrl)
+  } else {
+    const files = fs.readdirSync(dir).filter(f => f !== 'playlist.txt');
+    args = [
+      '-stream_loop', '-1',
+      '-re',
+      '-i', path.join(dir, files[0]),
+      '-c', 'copy',
+      '-f', 'flv',
+      rtmpUrl
+    ];
+  }
+
+  console.log(`[FFMPEG] execute command: ffmpeg ${args.join(' ')}`);
+  currentFfmpeg = spawn('ffmpeg', args, {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  currentStreamSession = dir;
+
+  let finished = false;
+
+  function cleanup() {
+    if (finished) return;
+    finished = true;
+
+    currentFfmpeg = null;
+    currentStreamSession = null;
+  }
+
+  currentFfmpeg.stderr.on('data', d => {
+    console.log('[ffmpeg]', d.toString());
+  });
+
+  currentFfmpeg.stdout.on('data', d => {
+    console.log('[ffmpeg:out]', d.toString());
+  });
+
+  currentFfmpeg.on('error', async err => {
+    console.error('[FFMPEG ERROR]', err);
+
+    cleanup();
+
+    await mongoDb.collection('stream_logs').insertOne({
+      action: 'ERROR',
+      at: new Date(),
+      result: err.message
+    });
+
+    broadcastToAdmins({
+      type: 'stream-status',
+      status: 'error',
+      message: '推流失败'
+    });
+  });
+
+  currentFfmpeg.on('exit', async (code, signal) => {
+    console.log('[FFMPEG EXIT]', code, signal);
+
+    cleanup();
+
+    await mongoDb.collection('stream_logs').insertOne({
+      action: 'EXIT',
+      at: new Date(),
+      result: code === 0 ? 'OK' : 'ERROR',
+      code,
+      signal
+    });
+
+    broadcastToAdmins({
+      type: 'stream-status',
+      status: code === 0 ? 'stopped' : 'error',
+      message:
+        code === 0
+          ? '推流结束'
+          : '推流中断（RTMP 连接断开）'
+    });
+  });
+}
 
 // ===== JWT 接口 =====
 app.get('/api/get-token', async (req, res) => {
@@ -442,7 +664,7 @@ app.get('/api/get-token', async (req, res) => {
 
   // 是否给 JaaS moderator，只取决于 systemRole
   const moderator = user.systemRole === 'host' || user.systemRole === 'admin';
-  
+
   const payload = {
     context: {
       user: {
@@ -470,6 +692,10 @@ app.get('/api/get-token', async (req, res) => {
   });
 
   res.send(token);
+});
+
+const upload = multer({
+  dest: '/data/uploads/tmp'
 });
 
 function requireAdmin(req, res, next) {
@@ -593,7 +819,247 @@ app.post('/api/admin/set-role', express.json(), requireAdmin, async (req, res) =
   });
 });
 
+app.get('/api/internal/admin-token', (req, res) => {
+  res.json({
+    token: ADMIN_TOKEN
+  });
+});
+
+// 推流相关
+app.post(
+  '/api/stream/start',
+  requireAdmin,
+  upload.array('files'),
+  async (req, res) => {
+    try {
+      // ===== 已有推流在进行中 =====
+      if (currentFfmpeg) {
+        return res.status(409).send('STREAM_ALREADY_RUNNING');
+      }
+
+      const mode = req.body.mode || 'playlist';
+
+      const files = req.files || [];
+      const sessionFiles = [];
+
+      // fingerprints 只对应 uploaded files
+      const fingerprints = req.body.fingerprints
+        ? (Array.isArray(req.body.fingerprints)
+          ? req.body.fingerprints
+          : [req.body.fingerprints])
+        : [];
+
+      // existing：前端命中缓存、不再上传的文件
+      const existing = req.body.existing
+        ? (Array.isArray(req.body.existing)
+          ? req.body.existing.map(e => JSON.parse(e))
+          : [JSON.parse(req.body.existing)])
+        : [];
+
+      const isClientTranscoded = req.body.clientTranscoded === '1';
+
+      const hasUploadedFiles = files.length > 0;
+      const hasExistingFiles = existing.length > 0;
+
+      // ===== 合法性校验 =====
+      if (!hasUploadedFiles && !hasExistingFiles) {
+        return res.status(400).send('NO_FILES');
+      }
+
+      if (hasUploadedFiles && fingerprints.length !== files.length) {
+        return res.status(400).send('FINGERPRINT_MISMATCH');
+      }
+
+      // ===== 创建 session 目录 =====
+      const sessionDir = `/data/uploads/session-${Date.now()}`;
+      fs.mkdirSync(sessionDir, { recursive: true });
+
+      const orderedFiles = [];
+
+      // =====================================================
+      // 1️⃣ 先处理 existing（已缓存文件，不需要 fingerprint）
+      // =====================================================
+      for (const { filePath, index } of existing) {
+
+        console.log(`filePath: ${filePath}, index: ${index}`);
+        if (!fs.existsSync(filePath)) {
+          return res.status(400).send('EXISTING_FILE_NOT_FOUND');
+        }
+
+        const sessionPath = path.join(sessionDir, path.basename(filePath));
+
+        try {
+          fs.linkSync(filePath, sessionPath);
+        } catch {
+          fs.copyFileSync(filePath, sessionPath);
+        }
+
+        orderedFiles.push({
+          index: index,
+          path: sessionPath
+        });
+      }
+
+      // =====================================================
+      // 2️⃣ 再处理 uploaded files（前端已转码）
+      // =====================================================
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const fingerprint = fingerprints[i];
+
+        if (!fingerprint) {
+          return res.status(400).send('MISSING_FINGERPRINT');
+        }
+
+        if (!f.path) {
+          return res.status(400).send('UPLOAD_PATH_MISSING');
+        }
+
+        const cachedPath = await getOrCreateCachedFile(fingerprint, f.path, f.originalname);
+
+        const sessionPath = path.join(
+          sessionDir,
+          path.basename(cachedPath)
+        );
+
+        try {
+          fs.linkSync(cachedPath, sessionPath);
+        } catch {
+          fs.copyFileSync(cachedPath, sessionPath);
+        }
+
+        orderedFiles.push({
+          index: Number(req.body.uploadIndexes?.[i] ?? i),
+          path: sessionPath
+        });
+      }
+
+      orderedFiles
+        .sort((a, b) => a.index - b.index)
+        .forEach(item => sessionFiles.push(item.path));
+
+      // =====================================================
+      // 3️⃣ playlist 模式：生成 playlist.txt
+      // =====================================================
+      let playlistPath = null;
+
+      if (mode === 'playlist') {
+        playlistPath = path.join(sessionDir, 'playlist.txt');
+
+        const content = sessionFiles
+          .map(p => `file '${p.replace(/'/g, "'\\''")}'`)
+          .join('\n');
+
+        fs.writeFileSync(playlistPath, content);
+      }
+
+      // =====================================================
+      // 4️⃣ 启动 ffmpeg 推流
+      // =====================================================
+      startFfmpeg(mode, sessionDir, playlistPath, isClientTranscoded);
+
+      // =====================================================
+      // 5️⃣ 操作日志（Mongo）
+      // =====================================================
+      await mongoDb.collection('stream_logs').insertOne({
+        action: 'START',
+        by: 'admin',
+        mode,
+        uploadedFiles: files.map(f => f.originalname),
+        existingFiles: existing,
+        at: new Date(),
+        result: 'OK'
+      });
+
+      res.send('STREAM_STARTED');
+    } catch (err) {
+      console.error('[STREAM_START_ERROR]', err);
+
+      await mongoDb.collection('stream_logs').insertOne({
+        action: 'START',
+        by: 'admin',
+        at: new Date(),
+        result: 'ERROR',
+        error: err.message
+      });
+
+      res.status(500).send('STREAM_START_FAILED');
+    }
+  }
+);
+
+app.post('/api/stream/stop', requireAdmin, async (req, res) => {
+  if (!currentFfmpeg) {
+    return res.send('当前没有推流');
+  }
+
+  currentFfmpeg.kill('SIGTERM');
+  currentFfmpeg = null;
+  currentStreamSession = null;
+
+  await mongoDb.collection('stream_logs').insertOne({
+    action: 'STOP',
+    by: 'admin',
+    at: new Date(),
+    result: 'OK'
+  });
+
+  res.send('推流结束');
+});
+
+app.post('/api/stream/message', requireAdmin, express.json(), async (req, res) => {
+  broadcastToAdmins({
+    type: 'stream-status',
+    status: 'info',
+    message: req.body.message
+  });
+
+  res.send('消息已发送');
+});
+
+app.post('/api/stream/check', requireAdmin, express.json(), async (req, res) => {
+  const { fingerprint } = req.body;
+  if (!fingerprint) {
+    return res.status(400).json({ error: 'MISSING_FINGERPRINT' });
+  }
+
+  const record = await mongoDb
+    .collection('transcoded_videos')
+    .findOne({ fingerprint });
+
+  if (!record) {
+    return res.json({ exists: false });
+  }
+
+  res.json({
+    exists: true,
+    path: record.path
+  });
+});
+
+setInterval(() => {
+  const now = Date.now();
+
+  fs.readdir(CACHE_DIR, (err, files) => {
+    if (err) return;
+
+    for (const file of files) {
+      const filePath = path.join(CACHE_DIR, file);
+
+      try {
+        const stat = fs.statSync(filePath);
+        const age = now - stat.mtimeMs;
+
+        if (age > CACHE_TTL_MS) {
+          fs.unlinkSync(filePath);
+          console.log('[CACHE] removed:', file);
+        }
+      } catch { }
+    }
+  });
+}, 6 * 60 * 60 * 1000); // 每 6 小时跑一次
+
 const HTTP_PORT = process.env.HTTP_PORT || 8081;
-app.listen(HTTP_PORT, () => {
+app.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log(`HTTP server running on port ${HTTP_PORT}`);
 });

@@ -1,12 +1,13 @@
 services:
   server:
+    container_name: server
     build:
       context: ./server
       dockerfile: Dockerfile
     restart: always
     volumes:
       - ./server/key.env:/app/key.env:ro
-      - /srv/fellowship/uploads:/data/uploads
+      - /srv/fellowship/uploads:/data/uploads # 服务器部署时记得执行 mkdir -p /srv/fellowship/uploads/cached | mkdir -p /srv/fellowship/uploads/cached | sudo chown -R 1000:1000 /srv/fellowship/uploads
     ports:
       - "8081:8081"
       - "3001:3001"
@@ -22,10 +23,12 @@ services:
       - mongo
 
   redis:
+    container_name: redis
     image: redis:7-alpine
     restart: always
   
   mongo:
+    container_name: mongo
     image: mongo:6
     restart: always
     volumes:
@@ -33,6 +36,7 @@ services:
 
   nginx:
     image: nginx:alpine
+    container_name: nginx
     restart: always
     volumes:
       - ./public:/usr/share/nginx/html:ro

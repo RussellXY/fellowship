@@ -2,6 +2,12 @@ const transcodeStatus = document.getElementById('transcodeStatus');
 const transcodeText = document.getElementById('transcodeText');
 const transcodeBar = document.getElementById('transcodeBar');
 
+const TranscodeStatus = {
+    NONE: 'none',        // 未转码
+    TRANSCODING: 'doing',// 正在转码
+    DONE: 'done'         // 已转码 / 已缓存
+};
+
 console.log('[DEBUG]', {
     crossOriginIsolated: window.crossOriginIsolated,
     sab: typeof SharedArrayBuffer,
@@ -29,7 +35,7 @@ function initStreamWS() {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'keepalive' }));
             }
-        }, 10000);
+        }, 25000);
         console.log('[WS] stream connected');
     };
 
@@ -128,11 +134,23 @@ function renderPlaylist() {
     playlist.forEach((item, index) => {
         const file = item.originalFile;
 
+        let statusText = '';
+        let statusClass = '';
+
+        if (item.transcodeStatus === TranscodeStatus.DONE) {
+            statusText = '✅ 已转码';
+            statusClass = 'ok';
+        } else if (item.transcodeStatus === TranscodeStatus.TRANSCODING) {
+            statusText = '⏳ 正在转码';
+            statusClass = 'info';
+        }
+
         const li = document.createElement('li');
         li.innerHTML = `
       <span>
         ${index + 1}. ${file.name}
         <span class="small">(${formatSize(file.size)})</span>
+        ${statusText ? `<span class="small ${statusClass}" style="margin-left:8px;">${statusText}</span>` : ''}
       </span>
       <button onclick="removeItem(${index})">移除</button>
     `;
@@ -183,6 +201,10 @@ async function checkTranscodedExists(fingerprint) {
     return await res.json(); // { exists: true, path }
 }
 
+function hideTranscodeStatus() {
+  transcodeStatus.style.display = 'none';
+}
+
 function canClientTranscode() {
     // Safari / iOS 一律禁用
     const ua = navigator.userAgent;
@@ -207,19 +229,6 @@ function canClientTranscode() {
 
 function isMobileDevice() {
     return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-}
-
-async function safeTranscode(file, index, total) {
-    try {
-        return await transcodeVideo(file, index, total);
-    } catch (err) {
-        if (err.message === 'CLIENT_TRANSCODE_CANCELLED') {
-            throw err; // 直接中断整个流程
-        }
-
-        console.warn('客户端转码失败，回退服务器转码:', err);
-        return null;
-    }
 }
 
 // ===== API =====
@@ -260,6 +269,8 @@ async function start() {
         if (check?.exists) {
             // ✅ 已有后端缓存
             existingItems.push({ filePath: check.path, index });
+            item.transcodeStatus = TranscodeStatus.DONE;
+            renderPlaylist();
         } else {
             if (!useClientTranscode) {
                 setStatus('❌ 当前环境不支持客户端转码', 'error');
@@ -269,8 +280,16 @@ async function start() {
             // ✅ 客户端转码（Step 2 核心）
             console.log('[INFO] 开始转码...');
             updateTranscodeProgress(0, `准备转码第 1 / 1 个视频`);
+
+            // 刷新播放列表转码状态
+            item.transcodeStatus = TranscodeStatus.TRANSCODING;
+            renderPlaylist();
+
             const safeFile = await transcodeToRTMPSafe(file, 0, 1);
             uploadItems.push({ file: safeFile, fingerprint: fp, index });
+
+            item.transcodeStatus = TranscodeStatus.DONE;
+            renderPlaylist();
         }
 
         form.append('loopIndex', index);
@@ -288,6 +307,8 @@ async function start() {
             if (check?.exists) {
                 // ✅ 已有缓存
                 existingItems.push({ filePath: check.path, index: i });
+                item.transcodeStatus = TranscodeStatus.DONE;
+                renderPlaylist();
                 continue;
             }
 
@@ -300,9 +321,17 @@ async function start() {
                 0,
                 `准备转码第 ${i + 1} / ${total} 个视频：${file.name}`
             );
+
+            // 刷新播放列表转码状态
+            item.transcodeStatus = TranscodeStatus.TRANSCODING;
+            renderPlaylist();
+
             console.log('[INFO] 开始转码...');
             const safeFile = await transcodeToRTMPSafe(file, i, total);
             uploadItems.push({ file: safeFile, fingerprint: fp, index: i });
+
+            item.transcodeStatus = TranscodeStatus.DONE;
+            renderPlaylist();
         }
     }
 
@@ -322,6 +351,7 @@ async function start() {
 
     form.append('mode', mode);
 
+    hideTranscodeStatus();
     setStatus('📡 正在启动推流…');
 
     const res = await fetch('/api/stream/start', {
@@ -533,7 +563,8 @@ function bindUI() {
 
             playlist.push({
                 originalFile: file,
-                fingerprint
+                fingerprint,
+                transcodeStatus: TranscodeStatus.NONE
             });
 
             fileFingerprints.add(key);

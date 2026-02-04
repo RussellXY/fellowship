@@ -5,7 +5,9 @@ const transcodeBar = document.getElementById('transcodeBar');
 const TranscodeStatus = {
     NONE: 'none',        // 未转码
     TRANSCODING: 'doing',// 正在转码
-    DONE: 'done'         // 已转码 / 已缓存
+    DONE: 'done',       // 已转码 / 已缓存
+    ERROR: 'error',        // 转码失败
+    SKIPPED: 'skipped',    // 已转码，流程中被跳过
 };
 
 console.log('[DEBUG]', {
@@ -58,7 +60,7 @@ function initStreamWS() {
             return;
         }
 
-        console.log('receive info message');
+        console.log('receive websocket message');
         if (data.type === 'stream-status') {
             if (data.status === 'error') {
                 setStatus('❌ 推流出错，请联系管理员', 'error');
@@ -137,23 +139,43 @@ function renderPlaylist() {
         let statusText = '';
         let statusClass = '';
 
-        if (item.transcodeStatus === TranscodeStatus.DONE) {
+        if (item.transcodeStatus === TranscodeStatus.DONE ||
+            item.transcodeStatus === TranscodeStatus.SKIPPED) {
             statusText = '✅ 已转码';
             statusClass = 'ok';
         } else if (item.transcodeStatus === TranscodeStatus.TRANSCODING) {
             statusText = '⏳ 正在转码';
             statusClass = 'info';
         }
+        else if (item.transcodeStatus === TranscodeStatus.ERROR) {
+            statusText = '❌ 转码失败';
+            statusClass = 'error';
+        }
+
+        let actionHTML = `
+            <div class="actions">
+                <button onclick="removeItem(${index})">移除</button>
+            </div>
+        `;
+
+        if (item.transcodeStatus === TranscodeStatus.ERROR) {
+            actionHTML = `
+                <div class="actions">
+                <button onclick="retryTranscode(${index})">🔁 重试</button>
+                <button onclick="removeItem(${index})">移除</button>
+                </div>
+            `;
+        }
 
         const li = document.createElement('li');
         li.innerHTML = `
-      <span>
-        ${index + 1}. ${file.name}
-        <span class="small">(${formatSize(file.size)})</span>
-        ${statusText ? `<span class="small ${statusClass}" style="margin-left:8px;">${statusText}</span>` : ''}
-      </span>
-      <button onclick="removeItem(${index})">移除</button>
-    `;
+            <span>
+                ${index + 1}. ${file.name}
+                <span class="small">(${formatSize(file.size)})</span>
+                ${statusText ? `<span class="small ${statusClass}" style="margin-left:8px;">${statusText}</span>` : ''}
+            </span>
+            ${actionHTML}
+            `;
         playlistEl.appendChild(li);
 
         const opt = document.createElement('option');
@@ -165,6 +187,33 @@ function renderPlaylist() {
     if (modeEl.value === 'loop') {
         loopSelector.classList.remove('hidden');
     }
+}
+
+async function retryTranscode(index) {
+    const item = playlist[index];
+
+    if (!item) return;
+
+    // 重置状态
+    item.transcodeStatus = TranscodeStatus.NONE;
+    renderPlaylist();
+
+    // 可选：立刻开始转码（或等用户点“开始推流”）
+    setStatus(`🔁 已重置转码状态：${item.originalFile.name}`);
+}
+
+function hasTranscodeErrors() {
+    return playlist.some(
+        item => item.transcodeStatus === TranscodeStatus.ERROR
+    );
+}
+
+function hasAnySuccessVideos() {
+    return playlist.some(
+        item =>
+            item.transcodeStatus === TranscodeStatus.DONE ||
+            item.transcodeStatus === TranscodeStatus.SKIPPED
+    );
 }
 
 // ===== 行为 =====
@@ -202,7 +251,7 @@ async function checkTranscodedExists(fingerprint) {
 }
 
 function hideTranscodeStatus() {
-  transcodeStatus.style.display = 'none';
+    transcodeStatus.style.display = 'none';
 }
 
 function canClientTranscode() {
@@ -258,6 +307,8 @@ async function start() {
     const uploadItems = [];
     const existingItems = [];
 
+    let cancelled = false;
+
     if (mode === 'loop') {
         const index = Number(loopTarget.value);
         const item = playlist[index];
@@ -299,6 +350,20 @@ async function start() {
 
         for (let i = 0; i < playlist.length; i++) {
             const item = playlist[i];
+
+            if (
+                item.transcodeStatus === TranscodeStatus.DONE ||
+                item.transcodeStatus === TranscodeStatus.SKIPPED
+            ) {
+                item.transcodeStatus = TranscodeStatus.SKIPPED;
+                continue;
+            }
+
+            if (item.transcodeStatus === TranscodeStatus.ERROR) {
+                // 失败但未重试 → 跳过
+                continue;
+            }
+
             const file = item.originalFile;
             const fp = item.fingerprint;
 
@@ -327,12 +392,37 @@ async function start() {
             renderPlaylist();
 
             console.log('[INFO] 开始转码...');
-            const safeFile = await transcodeToRTMPSafe(file, i, total);
-            uploadItems.push({ file: safeFile, fingerprint: fp, index: i });
+            try {
+                const safeFile = await transcodeToRTMPSafe(file, i, total);
+                uploadItems.push({ file: safeFile, fingerprint: fp, index: i });
 
-            item.transcodeStatus = TranscodeStatus.DONE;
-            renderPlaylist();
+                item.transcodeStatus = TranscodeStatus.DONE;
+                renderPlaylist();
+            }
+            catch (err) {
+                if (String(err?.message).includes('called FFmpeg.terminate()')) {
+                    cancelled = true;
+                    item.transcodeStatus = TranscodeStatus.NONE;
+                }
+                else {
+                    item.transcodeStatus = TranscodeStatus.ERROR;
+                }
+
+                hideTranscodeStatus();
+                renderPlaylist();
+                continue;
+            }
         }
+    }
+
+    if (existingItems.length == 0 && uploadItems.length == 0) {
+        if (cancelled) {
+            setStatus('转码取消');
+        }
+        else {
+            setStatus('文件转码失败', 'error');
+        }
+        return;
     }
 
     for (const item of existingItems) {
@@ -348,10 +438,35 @@ async function start() {
         form.append('clientTranscoded', '1');
     }
 
-
     form.append('mode', mode);
 
     hideTranscodeStatus();
+
+    // ===== 转码阶段结束，准备推流前 =====
+    if (hasTranscodeErrors()) {
+        // 如果一个成功的都没有，直接拦住
+        if (!hasAnySuccessVideos()) {
+            alert('❌ 所有视频均转码失败，无法开始推流');
+            setStatus('❌ 转码失败，请处理后重试', 'error');
+            return;
+        }
+
+        setStatus('⚠️ 转码完成，存在失败视频，等待确认…');
+        const ok = window.confirm(
+            '⚠️ 有视频转码失败。\n\n' +
+            '点击「确定」将忽略失败的视频，仅推流已转码成功的内容。\n' +
+            '点击「取消」返回处理失败视频（重试或移除）。'
+        );
+
+        if (!ok) {
+            setStatus('⏸ 已取消推流，请处理失败的视频');
+            return;
+        }
+
+        // ✅ 用户选择“是”：继续推流（忽略 ERROR）
+    }
+
+    console.log('[INFO] try to push stream');
     setStatus('📡 正在启动推流…');
 
     const res = await fetch('/api/stream/start', {
@@ -438,7 +553,23 @@ export async function getFFmpeg() {
         updateTranscodeProgress(percent);
     });
 
+    // 或者更详细的（捕获所有事件）
+    // ffmpeg.on('log', (data) => console.log('[LOG]', data.message));
+    // ffmpeg.on('progress', (progress) => console.log('[PROGRESS]', progress));
+    ffmpeg.on('error', (err) => console.error('[ERROR]', err.message));
+
     return ffmpeg;
+}
+
+async function fileExistsAndSize(name) {
+    try {
+        const data = await ffmpeg.readFile(name);
+        console.log(`${name} 存在，大小：${data.byteLength} bytes`);
+        return data.byteLength;
+    } catch (err) {
+        console.log(`${name} 不存在或读取失败：`, err.message);
+        return 0;
+    }
 }
 
 async function transcodeToRTMPSafe(file, index, total) {
@@ -465,19 +596,20 @@ async function transcodeToRTMPSafe(file, index, total) {
             '-i', inputName,
 
             // ===== 视频 =====
-            '-vf', `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,fps=${TARGET_FPS}`,
+            '-vf', 'format=yuv420p',
             '-c:v', 'libx264',
             '-pix_fmt', 'yuv420p',
             '-preset', 'veryfast',
-            '-crf', '24',
+            '-crf', '23',
 
             // 关键帧（RTMP 稳定）
-            '-g', String(TARGET_FPS * 2),
-            '-keyint_min', String(TARGET_FPS),
+            '-g', String(60),
+            '-keyint_min', '30',
             '-sc_threshold', '0',
 
             // ===== 音频（必须有）=====
             '-c:a', 'aac',
+            '-strict', 'experimental',
             '-ar', '44100',
             '-ac', '2',
             '-b:a', '128k',
@@ -486,18 +618,29 @@ async function transcodeToRTMPSafe(file, index, total) {
             outputName
         ]);
     } catch (e) {
-        if (e.name === 'AbortError') {
-            console.warn('[transcode] cancelled by user');
-            throw new Error('CLIENT_TRANSCODE_CANCELLED');
-        }
-
         console.error('[transcode] ffmpeg failed', e);
-        throw new Error('CLIENT_TRANSCODE_FAILED');
+        throw e;
     } finally {
         isTranscoding = false;
     }
 
-    const data = await ffmpeg.readFile(outputName);
+    let data;
+    try {
+        data = await ffmpeg.readFile(outputName);
+    }
+    catch (err) {
+        console.log(`[ERROR] failed to read transcoded data, error:${err}`);
+        throw err;
+    }
+
+    console.log(`[INFO] transcoding finished, data.length=${data.length}`);
+    if (!data || data.length === 0) {
+        console.error('[transcode] empty output file', {
+            file: file.name,
+            size: file.size
+        });
+        throw new Error('CLIENT_TRANSCODE_EMPTY_OUTPUT');
+    }
 
     // ✅ 清理虚拟文件系统
     try {
@@ -597,3 +740,4 @@ window.start = start;
 window.stop = stop;
 window.cancelTranscode = cancelTranscode;
 window.removeItem = removeItem;
+window.retryTranscode = retryTranscode;

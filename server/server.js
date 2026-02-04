@@ -52,6 +52,8 @@ const UPLOAD_ROOT = '/data/uploads';
 const CACHE_PATH = 'cached'
 const CACHE_DIR = path.join(UPLOAD_ROOT, CACHE_PATH);
 const CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 7 天
+const TRANSCODED_VIDEO_TABLE = 'transcoded_videos';
+const STREAM_LOG_TABLE = 'stream_logs'
 
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 
@@ -70,7 +72,7 @@ async function getOrCreateCachedFile(fingerprint,
 
   // ===== 1. 已存在缓存 =====
   const record = await mongoDb
-    .collection('transcoded_videos')
+    .collection(TRANSCODED_VIDEO_TABLE)
     .findOne({ fingerprint });
 
   if (record && fs.existsSync(record.path)) {
@@ -86,7 +88,7 @@ async function getOrCreateCachedFile(fingerprint,
   fs.renameSync(uploadedPath, cachedPath);
 
   // ===== 3. 现在，缓存“正式成立” =====
-  await mongoDb.collection('transcoded_videos').updateOne(
+  await mongoDb.collection(TRANSCODED_VIDEO_TABLE).updateOne(
     { fingerprint },
     {
       $set: {
@@ -602,7 +604,7 @@ function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
 
     cleanup();
 
-    await mongoDb.collection('stream_logs').insertOne({
+    await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
       action: 'ERROR',
       at: new Date(),
       result: err.message
@@ -620,7 +622,7 @@ function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
 
     cleanup();
 
-    await mongoDb.collection('stream_logs').insertOne({
+    await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
       action: 'EXIT',
       at: new Date(),
       result: code === 0 ? 'OK' : 'ERROR',
@@ -961,7 +963,7 @@ app.post(
       // =====================================================
       // 5️⃣ 操作日志（Mongo）
       // =====================================================
-      await mongoDb.collection('stream_logs').insertOne({
+      await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
         action: 'START',
         by: 'admin',
         mode,
@@ -975,7 +977,7 @@ app.post(
     } catch (err) {
       console.error('[STREAM_START_ERROR]', err);
 
-      await mongoDb.collection('stream_logs').insertOne({
+      await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
         action: 'START',
         by: 'admin',
         at: new Date(),
@@ -997,7 +999,7 @@ app.post('/api/stream/stop', requireAdmin, async (req, res) => {
   currentFfmpeg = null;
   currentStreamSession = null;
 
-  await mongoDb.collection('stream_logs').insertOne({
+  await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
     action: 'STOP',
     by: 'admin',
     at: new Date(),
@@ -1017,6 +1019,80 @@ app.post('/api/stream/message', requireAdmin, express.json(), async (req, res) =
   res.send('消息已发送');
 });
 
+app.post(
+  '/api/stream/cache/delete',
+  requireAdmin,
+  express.json(),
+  async (req, res) => {
+    try {
+      const { fingerprint } = req.body;
+
+      if (!fingerprint || typeof fingerprint !== 'string') {
+        return res.status(400).json({
+          error: 'MISSING_OR_INVALID_FINGERPRINT'
+        });
+      }
+
+      // 1️⃣ 查找 Mongo 记录
+      const record = await mongoDb
+        .collection(TRANSCODED_VIDEO_TABLE)
+        .findOne({ fingerprint });
+
+      if (!record) {
+        return res.status(404).json({
+          error: 'CACHE_RECORD_NOT_FOUND'
+        });
+      }
+
+      const filePath = record.path;
+
+      // 2️⃣ 删除文件（如果存在）
+      if (filePath && fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {
+          console.error('[CACHE_DELETE] Failed to delete file:', filePath, e);
+          return res.status(500).json({
+            error: 'FAILED_TO_DELETE_FILE'
+          });
+        }
+      }
+
+      // 3️⃣ 删除 Mongo 记录
+      await mongoDb
+        .collection('transcoded_videos')
+        .deleteOne({ fingerprint });
+
+      // 4️⃣ 记录操作日志（可选但推荐）
+      await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
+        action: 'CACHE_DELETE',
+        fingerprint,
+        filePath,
+        at: new Date(),
+        result: 'OK'
+      });
+
+      res.json({
+        ok: true,
+        fingerprint
+      });
+    } catch (err) {
+      console.error('[CACHE_DELETE_ERROR]', err);
+
+      await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
+        action: 'CACHE_DELETE',
+        at: new Date(),
+        result: 'ERROR',
+        error: err.message
+      });
+
+      res.status(500).json({
+        error: 'INTERNAL_ERROR'
+      });
+    }
+  }
+);
+
 app.post('/api/stream/check', requireAdmin, express.json(), async (req, res) => {
   const { fingerprint } = req.body;
   if (!fingerprint) {
@@ -1024,7 +1100,7 @@ app.post('/api/stream/check', requireAdmin, express.json(), async (req, res) => 
   }
 
   const record = await mongoDb
-    .collection('transcoded_videos')
+    .collection(TRANSCODED_VIDEO_TABLE)
     .findOne({ fingerprint });
 
   if (!record) {

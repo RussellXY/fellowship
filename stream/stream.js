@@ -199,7 +199,7 @@ async function retryTranscode(index) {
     renderPlaylist();
 
     // 可选：立刻开始转码（或等用户点“开始推流”）
-    setStatus(`🔁 已重置转码状态：${item.originalFile.name}`);
+    setStatus(`请点击开始推流来重新转码：${item.originalFile.name}`);
 }
 
 function hasTranscodeErrors() {
@@ -307,8 +307,6 @@ async function start() {
     const uploadItems = [];
     const existingItems = [];
 
-    let cancelled = false;
-
     if (mode === 'loop') {
         const index = Number(loopTarget.value);
         const item = playlist[index];
@@ -401,14 +399,20 @@ async function start() {
             }
             catch (err) {
                 if (String(err?.message).includes('called FFmpeg.terminate()')) {
-                    cancelled = true;
                     item.transcodeStatus = TranscodeStatus.NONE;
+                    setStatus('转码取消');
+                    renderPlaylist();
+                    hideTranscodeStatus();
+                    return;
                 }
                 else {
                     item.transcodeStatus = TranscodeStatus.ERROR;
                 }
 
-                hideTranscodeStatus();
+                // 如果后面没有待转码的视频时就隐藏转码进度条
+                if (i == total-1) {
+                    hideTranscodeStatus();
+                }
                 renderPlaylist();
                 continue;
             }
@@ -416,12 +420,7 @@ async function start() {
     }
     
     if (existingItems.length == 0 && uploadItems.length == 0) {
-        if (cancelled) {
-            setStatus('转码取消');
-        }
-        else {
-            setStatus('文件转码失败', 'error');
-        }
+        setStatus('文件转码失败', 'error');
         return;
     }
 
@@ -596,7 +595,8 @@ async function transcodeToRTMPSafe(file, index, total) {
             '-i', inputName,
 
             // ===== 视频 =====
-            '-vf', 'format=yuv420p',
+            // '-vf', 'format=yuv420p',
+            '-vf', `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,format=yuv420p`,
             '-c:v', 'libx264',
             '-pix_fmt', 'yuv420p',
             '-preset', 'veryfast',

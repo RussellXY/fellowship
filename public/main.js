@@ -58,10 +58,20 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     ws = new WebSocket(wsUrl);
 
+    let wsKeepAliveTimer = null;
     ws.onopen = () => {
       console.log('[WS] connected');
       wsConnecting = false;
       wsRetry = 0;
+
+      ws.onopen = () => {
+        wsKeepAliveTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'keepalive' }));
+          }
+        }, 25000);
+        console.log('[WS] stream connected');
+      };
     };
 
     ws.onmessage = e => {
@@ -73,11 +83,13 @@ window.addEventListener('DOMContentLoaded', async () => {
       console.warn('[WS] disconnected, retry in', retryDelay);
       wsRetry++;
       clearTimeout(wsRetryTimer);
+      clearInterval(wsKeepAliveTimer);
       wsRetryTimer = setTimeout(connectWS, retryDelay);
     };
 
     ws.onerror = e => {
       console.warn(`[WS] error:${e}`);
+      clearInterval(wsKeepAliveTimer);
     };
   }
 
@@ -406,11 +418,11 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   video.addEventListener('pause', () => {
     if (!allowLocalControl || suppressLocalEvent) return
-    
+
     wsSend({
-          type: 'pause',
-          currentTime: video.currentTime
-        });
+      type: 'pause',
+      currentTime: video.currentTime
+    });
   });
 
   video.addEventListener('seeking', () => {

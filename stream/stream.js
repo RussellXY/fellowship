@@ -414,7 +414,7 @@ async function start() {
             }
         }
     }
-
+    
     if (existingItems.length == 0 && uploadItems.length == 0) {
         if (cancelled) {
             setStatus('转码取消');

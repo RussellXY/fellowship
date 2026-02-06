@@ -201,11 +201,11 @@ window.addEventListener('DOMContentLoaded', async () => {
       lowLatencyMode: true,
 
       // 🎯 关键：启动时不要贴 live edge
-      liveSyncDuration: 4,          // 秒（≈ 2 个 segment）
-      liveMaxLatencyDuration: 8,    // 允许最大延迟
+      liveSyncDuration: 10,          // 秒（≈ 5 个 segment）
+      liveMaxLatencyDuration: 15,    // 允许最大延迟
 
       // buffer 策略
-      maxBufferLength: 15,
+      maxBufferLength: 20,
       backBufferLength: 0,
 
       // 卡顿恢复

@@ -103,7 +103,21 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (Hls.isSupported()) {
-      hls = new Hls();
+      hls = new Hls({
+        // 低延迟仍然保留
+        lowLatencyMode: true,
+
+        // 🎯 关键：新观众不要贴 live edge
+        liveSyncDuration: 4,          // ≈ 2 个 segment
+        liveMaxLatencyDuration: 8,
+
+        // buffer 控制
+        maxBufferLength: 15,
+        backBufferLength: 0,
+
+        // 卡顿时追帧
+        maxLiveSyncPlaybackRate: 1.5
+      });
       hls.loadSource(liveUrl);
       hls.attachMedia(video);
     } else {

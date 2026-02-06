@@ -176,9 +176,11 @@ window.addEventListener('DOMContentLoaded', async () => {
       suppressLocalEvent = true;
       video.currentTime = data.currentTime;
 
-      video.play().catch(() => { }).finally(() => {
-        suppressLocalEvent = false;
-      });;
+      if (isIOS() == false) {
+        video.play().catch(() => { }).finally(() => {
+          suppressLocalEvent = false;
+        });;
+      }
     }
 
     // ===== 暂停 =====
@@ -216,10 +218,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       // 时间 & 播放状态
       video.currentTime = data.state.currentTime;
 
-      if (data.state.playing) {
-        video.play().catch(() => { });
-      } else {
-        video.pause();
+      if (isIOS() == false) {
+        if (data.state.playing) {
+          video.play().catch(() => { });
+        } else {
+          video.pause();
+        }
       }
 
       // live 显示状态

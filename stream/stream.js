@@ -39,6 +39,12 @@ function isAutoUploadEnabled() {
 let ADMIN_TOKEN = null;
 
 let ws = null;
+let wsReconnectTimer = null;
+let wsReconnectAttempts = 0;
+let wsManuallyClosed = false;
+
+const WS_RECONNECT_BASE_DELAY = 1000;  // 1s
+const WS_RECONNECT_MAX_DELAY = 30_000; // 30s
 
 let isTranscoding = false;
 
@@ -61,8 +67,28 @@ Object.defineProperty(window, 'currentStreamStatus', {
     }
 });
 
-function initStreamWS() {
-    if (ws && ws.readyState === WebSocket.OPEN) return;
+function scheduleWSReconnect() {
+    if (wsReconnectTimer) return;
+
+    wsReconnectAttempts++;
+
+    const delay = Math.min(
+        WS_RECONNECT_BASE_DELAY * Math.pow(2, wsReconnectAttempts - 1),
+        WS_RECONNECT_MAX_DELAY
+    );
+
+    console.log(`[WS] reconnect in ${delay}ms`);
+
+    wsReconnectTimer = setTimeout(() => {
+        wsReconnectTimer = null;
+        connectStreamWS();
+    }, delay);
+}
+
+function connectStreamWS() {
+    if (ws && ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) return;
+
+    wsManuallyClosed = false;
 
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
     const wsUrl = `${protocol}://${location.host}/ws/stream`;
@@ -77,12 +103,21 @@ function initStreamWS() {
                 ws.send(JSON.stringify({ type: 'keepalive' }));
             }
         }, 25000);
+        wsReconnectAttempts = 0;
         console.log('[WS] stream connected');
     };
 
     ws.onclose = () => {
         clearInterval(wsKeepAliveTimer);
         console.warn('[WS] stream disconnected');
+
+        ws = null;
+        if (wsManuallyClosed) {
+            console.log('[WS] closed manually, no reconnect');
+            return;
+        }
+
+        scheduleWSReconnect();
     };
 
     ws.onerror = (e) => {
@@ -935,9 +970,23 @@ function bindUI() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    initStreamWS();
+    connectStreamWS();
     bindUI();
     updateStartButtonState();
+});
+
+window.addEventListener('beforeunload', () => {
+    wsManuallyClosed = true;
+
+    if (ws) {
+        ws.close();
+        ws = null;
+    }
+
+    if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+    }
 });
 
 // 显式暴露给 HTML inline handler

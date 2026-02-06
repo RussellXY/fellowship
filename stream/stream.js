@@ -17,6 +17,13 @@ const CacheStatus = {
     ERROR: 'error'       // 上传失败
 };
 
+const StreamStatus = {
+    IDLE: 'idle',
+    TRANSCODING: 'transcoding',
+    RUNNING: 'running',
+    ERROR: 'error'
+}
+
 console.log('[DEBUG]', {
     crossOriginIsolated: window.crossOriginIsolated,
     sab: typeof SharedArrayBuffer,
@@ -34,6 +41,25 @@ let ADMIN_TOKEN = null;
 let ws = null;
 
 let isTranscoding = false;
+
+let _currentStreamStatus = StreamStatus.IDLE;
+
+Object.defineProperty(window, 'currentStreamStatus', {
+    get() {
+        return _currentStreamStatus;
+    },
+    set(newStatus) {
+        if (_currentStreamStatus === newStatus) return;
+
+        const oldStatus = _currentStreamStatus;
+        _currentStreamStatus = newStatus;
+
+        console.log('[StreamStatus]', oldStatus, '→', newStatus);
+
+        // ⭐ 统一副作用
+        updateStartButtonState();
+    }
+});
 
 function initStreamWS() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -77,11 +103,13 @@ function initStreamWS() {
         if (data.type === 'stream-status') {
             if (data.status === 'error') {
                 resetStreamFlags();
+                currentStreamStatus = StreamStatus.ERROR;
                 setStatus('❌ 推流出错，请联系管理员', 'error');
             }
 
             if (data.status === 'stopped') {
                 resetStreamFlags();
+                currentStreamStatus = StreamStatus.IDLE;
                 setStatus('⏹ 推流已结束', 'info');
             }
 
@@ -120,6 +148,7 @@ const modeEl = document.getElementById('mode');
 const loopSelector = document.getElementById('loopSelector');
 const loopTarget = document.getElementById('loopTarget');
 const fileInput = document.getElementById('fileInput');
+const startBtn = document.getElementById('startBtn');
 
 // ===== 工具 =====
 function fileKey(file) {
@@ -228,6 +257,16 @@ function renderPlaylist() {
     if (modeEl.value === 'loop') {
         loopSelector.classList.remove('hidden');
     }
+}
+
+function updateStartButtonState() {
+    const busy =
+        currentStreamStatus === StreamStatus.TRANSCODING ||
+        currentStreamStatus === StreamStatus.RUNNING;
+
+    startBtn.disabled = busy;
+    startBtn.classList.toggle('opacity-50', busy);
+    startBtn.classList.toggle('cursor-not-allowed', busy);
 }
 
 async function retryTranscode(index) {
@@ -375,11 +414,18 @@ function resetStreamFlags() {
 
 // ===== API =====
 async function start() {
+    console.log(`Stream status: ${currentStreamStatus}`);
+    if (currentStreamStatus !== StreamStatus.IDLE && currentStreamStatus !== StreamStatus.ERROR) {
+        return;
+    }
+
     if (playlist.length === 0) {
         setStatus('❌ 播放列表为空', 'error');
         return;
     }
     resetStreamFlags();
+
+    currentStreamStatus = StreamStatus.TRANSCODING;
 
     const mode = modeEl.value;
     const form = new FormData();
@@ -415,6 +461,7 @@ async function start() {
         } else {
             if (!useClientTranscode) {
                 setStatus('❌ 当前环境不支持客户端转码', 'error');
+                currentStreamStatus = StreamStatus.ERROR;
                 return;
             }
 
@@ -470,6 +517,7 @@ async function start() {
 
             if (!useClientTranscode) {
                 setStatus('❌ 当前环境不支持客户端转码', 'error');
+                currentStreamStatus = StreamStatus.ERROR;
                 return;
             }
 
@@ -511,6 +559,8 @@ async function start() {
                     setStatus('转码取消');
                     renderPlaylist();
                     hideTranscodeStatus();
+
+                    currentStreamStatus = StreamStatus.IDLE;
                     return;
                 }
                 else {
@@ -529,6 +579,7 @@ async function start() {
 
     if (existingItems.length == 0 && uploadItems.length == 0) {
         setStatus('文件转码失败', 'error');
+        currentStreamStatus = StreamStatus.ERROR;
         return;
     }
 
@@ -561,6 +612,7 @@ async function start() {
         if (!hasAnySuccessVideos()) {
             alert('❌ 所有视频均转码失败，无法开始推流');
             setStatus('❌ 转码失败，请处理后重试', 'error');
+            currentStreamStatus = StreamStatus.ERROR;
             return;
         }
 
@@ -573,6 +625,7 @@ async function start() {
 
         if (!ok) {
             setStatus('⏸ 已取消推流，请处理失败的视频');
+            currentStreamStatus = StreamStatus.IDLE;
             return;
         }
 
@@ -580,7 +633,13 @@ async function start() {
     }
     setStatus('📡 正在启动推流…');
 
-    const res = await fetch('/api/stream/start', {
+    currentStreamStatus = StreamStatus.RUNNING;
+
+    const UPLOAD_BASE = location.hostname.endsWith('ledbygrace.live')
+        ? 'https://upload.ledbygrace.live'
+        : '';
+
+    const res = await fetch(`${UPLOAD_BASE}/api/stream/start`, {
         method: 'POST',
         headers: {
             'x-admin-token': token
@@ -593,9 +652,17 @@ async function start() {
     res.ok
         ? setStatus('✅ 推流中', 'ok')
         : setStatus('❌ ' + text, 'error');
+
+    if (res.ok == false) {
+        currentStreamStatus = StreamStatus.ERROR;
+    }
 }
 
 async function stop() {
+    if (currentStreamStatus !== StreamStatus.RUNNING) {
+        return;
+    }
+
     const token = await loadAdminToken();
     const res = await fetch('/api/stream/stop', {
         method: 'POST', headers: {
@@ -619,7 +686,11 @@ async function uploadTranscodedCache(item, file, fingerprint) {
     form.append('file', file, file.name);
     form.append('fingerprint', fingerprint);
 
-    const res = await fetch('/api/stream/cache', {
+    const UPLOAD_BASE = location.hostname.endsWith('ledbygrace.live')
+        ? 'https://upload.ledbygrace.live'
+        : '';
+
+    const res = await fetch(`${UPLOAD_BASE}/api/stream/cache`, {
         method: 'PUT',
         headers: {
             'x-admin-token': token
@@ -866,6 +937,7 @@ function bindUI() {
 document.addEventListener('DOMContentLoaded', () => {
     initStreamWS();
     bindUI();
+    updateStartButtonState();
 });
 
 // 显式暴露给 HTML inline handler

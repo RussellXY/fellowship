@@ -913,7 +913,7 @@ app.post(
     try {
       // ===== 已有推流在进行中 =====
       if (currentFfmpeg) {
-        return res.status(409).send('STREAM_ALREADY_RUNNING');
+        return res.status(409).send('后台正在推流中，请先结束推流后再重试');
       }
 
       const mode = req.body.mode || 'playlist';

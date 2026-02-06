@@ -76,10 +76,12 @@ function initStreamWS() {
         console.log('receive websocket message');
         if (data.type === 'stream-status') {
             if (data.status === 'error') {
+                resetStreamFlags();
                 setStatus('❌ 推流出错，请联系管理员', 'error');
             }
 
             if (data.status === 'stopped') {
+                resetStreamFlags();
                 setStatus('⏹ 推流已结束', 'info');
             }
 
@@ -359,17 +361,28 @@ function shouldAutoUploadAfterTranscode(currentIndex) {
     return true;
 }
 
+function resetStreamFlags() {
+    for (const item of playlist) {
+        if (
+            item.transcodeStatus === TranscodeStatus.SKIPPED ||
+            item.transcodeStatus === TranscodeStatus.DONE
+        ) {
+            // 只重置“是否参与本次推流”，不影响缓存
+            item.transcodeStatus = TranscodeStatus.NONE;
+        }
+    }
+}
+
 // ===== API =====
 async function start() {
     if (playlist.length === 0) {
         setStatus('❌ 播放列表为空', 'error');
         return;
     }
+    resetStreamFlags();
 
     const mode = modeEl.value;
     const form = new FormData();
-
-    setStatus('⏳ 准备推流…');
 
     const token = await loadAdminToken();
 

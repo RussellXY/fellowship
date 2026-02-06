@@ -53,6 +53,7 @@ if (!ADMIN_TOKEN) {
 // ===== File Upload =====
 const UPLOAD_ROOT = '/data/uploads';
 const CACHE_PATH = 'cached'
+const TMP_PATH = '/data/uploads/tmp';
 const CACHE_DIR = path.join(UPLOAD_ROOT, CACHE_PATH);
 const CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // 7 天
 const TRANSCODED_VIDEO_TABLE = 'transcoded_videos';
@@ -68,6 +69,20 @@ function cleanupSession(sessionDir) {
     console.log('[CLEANUP] removed session:', sessionDir);
   } catch (e) {
     console.warn('[CLEANUP] failed:', e.message);
+  }
+}
+
+function emptyDir(dir) {
+  if (!fs.existsSync(dir)) return;
+
+  const entries = fs.readdirSync(dir);
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry);
+    try {
+      fs.rmSync(fullPath, { recursive: true, force: true });
+    } catch (e) {
+      console.warn('[CLEANUP] failed to remove:', fullPath, e.message);
+    }
   }
 }
 
@@ -755,11 +770,11 @@ app.get('/api/get-token', async (req, res) => {
 });
 
 const upload = multer({
-  dest: '/data/uploads/tmp'
+  dest: TMP_PATH
 });
 
 const cacheUpload = multer({
-  dest: '/data/uploads/tmp'
+  dest: TMP_PATH
 });
 
 function requireAdmin(req, res, next) {
@@ -1210,6 +1225,64 @@ app.post(
 
       res.status(500).json({
         error: 'INTERNAL_ERROR'
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/cleanup-transcode',
+  requireAdmin,
+  async (req, res) => {
+    try {
+      console.warn('[ADMIN] cleanup-transcode triggered');
+
+      // =====  如果正在推流 则返回失败 =====
+      if (currentFfmpeg) {
+        return res.status(400).json({ error: 'Cannot cleanup while streaming' });
+      }
+
+      // ===== 2️⃣ 清空磁盘 =====
+      emptyDir(CACHE_DIR);                // cached/*
+      // emptyDir(TMP_DIR):
+      
+      // session-* 目录
+      if (fs.existsSync(UPLOAD_ROOT)) {
+        const dirs = fs.readdirSync(UPLOAD_ROOT);
+        for (const name of dirs) {
+          if (name.startsWith('session-')) {
+            const fullPath = path.join(UPLOAD_ROOT, name);
+            fs.rmSync(fullPath, { recursive: true, force: true });
+          }
+        }
+      }
+
+      // ===== 3️⃣ 清空 Mongo =====
+      const result = await mongoDb
+        .collection('transcoded_videos')
+        .deleteMany({});
+
+      // ===== 4️⃣ 记录日志 =====
+      await mongoDb.collection('stream_logs').insertOne({
+        action: 'CLEANUP_TRANSCODE',
+        by: 'admin',
+        removedCachedFiles: true,
+        // removedTmpFiles: true,
+        removedSessions: true,
+        removedMongoCount: result.deletedCount,
+        at: new Date()
+      });
+
+      res.json({
+        ok: true,
+        deletedMongoRecords: result.deletedCount
+      });
+    } catch (err) {
+      console.error('[CLEANUP_TRANSCODE_ERROR]', err);
+
+      res.status(500).json({
+        ok: false,
+        error: err.message
       });
     }
   }

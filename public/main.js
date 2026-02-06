@@ -197,12 +197,19 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   if (Hls.isSupported()) {
     const hls = new Hls({
-      liveSyncDuration: 2,
-      liveMaxLatencyDuration: 5,
-      maxBufferLength: 10,
-      maxLiveSyncPlaybackRate: 1.5,
+      // 低延迟模式仍然开启
       lowLatencyMode: true,
-      backBufferLength: 0
+
+      // 🎯 关键：启动时不要贴 live edge
+      liveSyncDuration: 4,          // 秒（≈ 2 个 segment）
+      liveMaxLatencyDuration: 8,    // 允许最大延迟
+
+      // buffer 策略
+      maxBufferLength: 15,
+      backBufferLength: 0,
+
+      // 卡顿恢复
+      maxLiveSyncPlaybackRate: 1.5
     });
     hls.loadSource(liveUrl);
     hls.attachMedia(video);

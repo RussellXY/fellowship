@@ -17,7 +17,21 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   const controls = document.getElementById('controls');
 
-  video.controls = true;
+  function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  if (isIOS()) {
+    // ===== iOS：系统播放器路径 =====
+    video.setAttribute('controls', '');
+    video.setAttribute('playsinline', 'false');
+    video.setAttribute('webkit-playsinline', 'false');
+  } else {
+    // ===== 桌面 / Android：页面内播放器 =====
+    video.setAttribute('playsinline', '');
+    video.setAttribute('controls');
+  }
 
   // ===== 1. 获取 token =====
   const tokenRes = await fetch(`/api/get-token?room=${ROOM_NAME}&name=${USER_NAME}`);
@@ -102,6 +116,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       hls = null;
     }
 
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // ⭐ iOS / WebKit：直接交给系统
+      video.src = src;
+      return;
+    }
+
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
     if (Hls.isSupported()) {
@@ -116,23 +136,18 @@ window.addEventListener('DOMContentLoaded', async () => {
         } :
         {// 低延迟模式仍然开启
           lowLatencyMode: true,
-
           // 🎯 关键：启动时不要贴 live edge
           liveSyncDuration: 6,          // 秒（≈ 2 个 segment）
           liveMaxLatencyDuration: 12,    // 允许最大延迟
-
           // buffer 策略
           maxBufferLength: 20,
           backBufferLength: 0,
-
           // === 稳定性相关 ===
           enableWorker: true,
           progressive: true,
-
           // === Owncast 会关掉这些激进策略 ===
           capLevelToPlayerSize: true,
           startLevel: -1,
-
           // 卡顿恢复
           maxLiveSyncPlaybackRate: 1.5
         };
@@ -148,7 +163,6 @@ window.addEventListener('DOMContentLoaded', async () => {
       });
     } else {
       video.src = liveUrl;
-      video.play();
     }
   }
 

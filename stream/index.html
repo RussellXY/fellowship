@@ -103,11 +103,25 @@
 
         <div class="toolbar">
             <input type="file" id="fileInput" multiple />
-            <span class="small">支持文件多选</span>
+
+            <label class="flex items-center gap-2 cursor-pointer select-none">
+                <span class="text-sm text-gray-300">转码成功自动上传后台</span>
+                <input type="checkbox" id="autoUploadAfterTranscode" class="sr-only peer" checked/>
+                <div class="w-11 h-6 bg-gray-600 rounded-full peer
+             peer-checked:bg-blue-600
+             after:content-['']
+             after:absolute after:top-0.5 after:left-0.5
+             after:w-5 after:h-5
+             after:bg-white after:rounded-full
+             after:transition-all
+             peer-checked:after:translate-x-5
+             relative">
+                </div>
+            </label>
         </div>
 
         <ul id="playlist"></ul>
-        <p id="emptyTip" class="small">尚未添加任何视频</p>
+        <p id="emptyTip" class="small">尚未添加任何视频 支持文件多选</p>
     </section>
 
     <!-- 推流模式 -->

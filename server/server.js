@@ -13,6 +13,9 @@ import { spawn } from 'child_process';
 
 let currentFfmpeg = null;
 let currentStreamSession = null;
+let isStreamStoppingManually = false;
+
+let lastStreamAdminActiveAt = null;
 
 function loadLocalEnv(filename = 'key.env') {
   const filePath = path.resolve(process.cwd(), filename);
@@ -56,6 +59,17 @@ const TRANSCODED_VIDEO_TABLE = 'transcoded_videos';
 const STREAM_LOG_TABLE = 'stream_logs'
 
 fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+function cleanupSession(sessionDir) {
+  if (!sessionDir) return;
+
+  try {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+    console.log('[CLEANUP] removed session:', sessionDir);
+  } catch (e) {
+    console.warn('[CLEANUP] failed:', e.message);
+  }
+}
 
 async function getOrCreateCachedFile(fingerprint,
   uploadedPath,
@@ -279,6 +293,7 @@ const APP_ID_EXTRA = '29e98e'
 const PRIVATE_KEY = fs.readFileSync('./fellowship.pk', 'utf8').trim();
 
 // ===== WebSocket Server =====
+const STREAM_ADMIN_IDLE_LIMIT_MS = 30 * 60 * 1000; // 30 分钟
 const adminClients = new Set();
 const wss = new WebSocketServer({ port: 3001 });
 
@@ -358,11 +373,19 @@ wss.on('connection', async (ws, req) => {
       ws.isAlive = true;
     });
 
+    lastStreamAdminActiveAt = Date.now();
+
     ws.on('close', () => {
       adminClients.delete(ws);
+
+      // 如果这是最后一个 admin 断开
+      if (adminClients.size === 0) {
+        lastStreamAdminActiveAt = Date.now();
+      }
     });
 
     ws.on('message', async raw => {
+      lastStreamAdminActiveAt = Date.now();
       let data;
       try {
         data = JSON.parse(raw);
@@ -555,21 +578,37 @@ function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
 
   if (mode === 'playlist') {
     args = [
+      '-nostats',
+      '-loglevel', 'info',
       '-re',
       '-f', 'concat',
       '-safe', '0',
       '-i', playlistPath,
+      '-c', 'copy',
+      '-map', ' 0:v',
+      '-map', ' 0:a?',
+      '-flush_packets', '0',
+      '-avioflags', 'direct',
+      '-flvflags', 'no_duration_filesize',
+      '-rtmp_live', 'live',
+      '-f', 'flv',
+      rtmpUrl
     ];
-
-    args.push('-c', 'copy');
-    args.push('-f', 'flv', rtmpUrl)
   } else {
     const files = fs.readdirSync(dir).filter(f => f !== 'playlist.txt');
     args = [
+      '-nostats',
+      '-loglevel', 'info',
       '-stream_loop', '-1',
       '-re',
       '-i', path.join(dir, files[0]),
       '-c', 'copy',
+      '-map', ' 0:v',
+      '-map', ' 0:a?',
+      '-flush_packets', '0',
+      '-avioflags', 'direct',
+      '-flvflags', 'no_duration_filesize',
+      '-rtmp_live', 'live',
       '-f', 'flv',
       rtmpUrl
     ];
@@ -600,6 +639,11 @@ function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
   });
 
   currentFfmpeg.on('error', async err => {
+    if (isStreamStoppingManually) {
+      console.log('[FFMPEG] stopped manually (error ignored)');
+      return;
+    }
+
     console.error('[FFMPEG ERROR]', err);
 
     cleanup();
@@ -618,9 +662,15 @@ function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
   });
 
   currentFfmpeg.on('exit', async (code, signal) => {
+    const manual = isStreamStoppingManually;
     console.log('[FFMPEG EXIT]', code, signal);
 
     cleanup();
+    cleanupSession(currentStreamSession);
+
+    currentFfmpeg = null;
+    currentStreamSession = null;
+    isStreamStoppingManually = false;
 
     await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
       action: 'EXIT',
@@ -630,14 +680,22 @@ function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
       signal
     });
 
-    broadcastToAdmins({
-      type: 'stream-status',
-      status: code === 0 ? 'stopped' : 'error',
-      message:
-        code === 0
-          ? '推流结束'
-          : '推流中断（RTMP 连接断开）'
-    });
+    if (manual) {
+      broadcastToAdmins({
+        type: 'stream-status',
+        status: 'stopped',
+      });
+    }
+    else {
+      broadcastToAdmins({
+        type: 'stream-status',
+        status: code === 0 ? 'stopped' : 'error',
+        message:
+          code === 0
+            ? '推流结束'
+            : '推流出错'
+      });
+    }
   });
 }
 
@@ -697,6 +755,10 @@ app.get('/api/get-token', async (req, res) => {
 });
 
 const upload = multer({
+  dest: '/data/uploads/tmp'
+});
+
+const cacheUpload = multer({
   dest: '/data/uploads/tmp'
 });
 
@@ -851,6 +913,8 @@ app.post(
           : [req.body.fingerprints])
         : [];
 
+      const indexs = req.body.indexs ? (Array.isArray(req.body.indexs) ? req.body.indexs : [req.body.indexs]) : [];
+
       // existing：前端命中缓存、不再上传的文件
       const existing = req.body.existing
         ? (Array.isArray(req.body.existing)
@@ -868,8 +932,8 @@ app.post(
         return res.status(400).send('NO_FILES');
       }
 
-      if (hasUploadedFiles && fingerprints.length !== files.length) {
-        return res.status(400).send('FINGERPRINT_MISMATCH');
+      if (hasUploadedFiles && (fingerprints.length !== files.length || indexs.length != files.length)) {
+        return res.status(400).send('FINGERPRINT_OR_INDEXS_MISMATCH');
       }
 
       // ===== 创建 session 目录 =====
@@ -908,7 +972,9 @@ app.post(
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
         const fingerprint = fingerprints[i];
+        const index = indexs[i];
 
+        console.log(`[INFO] path:${f}, name: ${f.originalname}, index: ${index}`);
         if (!fingerprint) {
           return res.status(400).send('MISSING_FINGERPRINT');
         }
@@ -931,7 +997,7 @@ app.post(
         }
 
         orderedFiles.push({
-          index: Number(req.body.uploadIndexes?.[i] ?? i),
+          index: index,
           path: sessionPath
         });
       }
@@ -995,9 +1061,12 @@ app.post('/api/stream/stop', requireAdmin, async (req, res) => {
     return res.send('当前没有推流');
   }
 
+  if (currentStreamSession) {
+    cleanupSession(currentStreamSession);
+  }
+
   currentFfmpeg.kill('SIGTERM');
-  currentFfmpeg = null;
-  currentStreamSession = null;
+  isStreamStoppingManually = true;
 
   await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
     action: 'STOP',
@@ -1006,7 +1075,7 @@ app.post('/api/stream/stop', requireAdmin, async (req, res) => {
     result: 'OK'
   });
 
-  res.send('推流结束');
+  res.send('stopped');
 });
 
 app.post('/api/stream/message', requireAdmin, express.json(), async (req, res) => {
@@ -1018,6 +1087,59 @@ app.post('/api/stream/message', requireAdmin, express.json(), async (req, res) =
 
   res.send('消息已发送');
 });
+
+app.put(
+  '/api/stream/cache',
+  requireAdmin,
+  cacheUpload.single('file'),
+  async (req, res) => {
+    try {
+      const file = req.file;
+      const fingerprint = req.body.fingerprint;
+
+      // return res.status(400).send('Failed');
+
+      if (!file || !fingerprint) {
+        return res.status(400).send('MISSING_FILE_OR_FINGERPRINT');
+      }
+
+      const existed = await mongoDb
+        .collection(TRANSCODED_VIDEO_TABLE)
+        .findOne({ fingerprint });
+
+      if (existed && fs.existsSync(existed.path)) {
+        return res.json({
+          ok: true,
+          existed: true,
+          path: existed.path
+        });
+      }
+
+      // 复用你已有的缓存逻辑
+      const cachedPath = await getOrCreateCachedFile(
+        fingerprint,
+        file.path,
+        file.originalname
+      );
+
+      await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
+        action: 'CACHE_UPLOAD',
+        fingerprint,
+        file: file.originalname,
+        path: cachedPath,
+        at: new Date()
+      });
+
+      res.json({
+        ok: true,
+        path: cachedPath
+      });
+    } catch (err) {
+      console.error('[CACHE_UPLOAD_ERROR]', err);
+      res.status(500).send('CACHE_UPLOAD_FAILED');
+    }
+  }
+);
 
 app.post(
   '/api/stream/cache/delete',
@@ -1139,3 +1261,33 @@ const HTTP_PORT = process.env.HTTP_PORT || 8081;
 app.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log(`HTTP server running on port ${HTTP_PORT}`);
 });
+
+setInterval(async () => {
+  // 没在推流，不关心
+  if (!currentFfmpeg) return;
+
+  // 还存在 admin 连接，不关心
+  if (adminClients.size > 0) return;
+
+  // 从来没有 admin 连接过（例如重启后）
+  if (!lastStreamAdminActiveAt) return;
+
+  const idleMs = Date.now() - lastStreamAdminActiveAt;
+
+  if (idleMs < STREAM_ADMIN_IDLE_LIMIT_MS) return;
+
+  console.warn('[WATCHDOG] No stream admin for 30 minutes, stopping stream');
+
+  // 👇 标记为“系统自动停止”
+  isStreamStoppingManually = true;
+
+  currentFfmpeg.kill('SIGTERM');
+
+  await mongoDb.collection(STREAM_LOG_TABLE).insertOne({
+    action: 'AUTO_STOP',
+    reason: 'NO_STREAM_ADMIN_30_MIN',
+    by: 'Server',
+    at: new Date()
+  });
+
+}, 60 * 1000); // 每 1 分钟检查一次

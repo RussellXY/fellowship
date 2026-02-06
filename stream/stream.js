@@ -10,11 +10,24 @@ const TranscodeStatus = {
     SKIPPED: 'skipped',    // 已转码，流程中被跳过
 };
 
+const CacheStatus = {
+    NONE: 'none',        // 未上传
+    UPLOADING: 'uploading',
+    DONE: 'done',        // 已缓存
+    ERROR: 'error'       // 上传失败
+};
+
 console.log('[DEBUG]', {
     crossOriginIsolated: window.crossOriginIsolated,
     sab: typeof SharedArrayBuffer,
     location: location.href
 });
+
+const autoUploadSwitch = document.getElementById('autoUploadAfterTranscode');
+
+function isAutoUploadEnabled() {
+    return autoUploadSwitch?.checked;
+}
 
 let ADMIN_TOKEN = null;
 
@@ -152,6 +165,22 @@ function renderPlaylist() {
             statusClass = 'error';
         }
 
+        let cacheText = '';
+        let cacheClass = '';
+
+        if (item.cacheStatus === CacheStatus.DONE) {
+            cacheText = '📦 已缓存';
+            cacheClass = 'ok';
+        }
+        else if (item.cacheStatus === CacheStatus.UPLOADING) {
+            cacheText = '📦 上传中';
+            cacheClass = 'info';
+        }
+        else if (item.cacheStatus === CacheStatus.ERROR) {
+            cacheText = '📦 上传失败';
+            cacheClass = 'error';
+        }
+
         let actionHTML = `
             <div class="actions">
                 <button onclick="removeItem(${index})">移除</button>
@@ -167,12 +196,22 @@ function renderPlaylist() {
             `;
         }
 
+        if (item.cacheStatus === CacheStatus.ERROR) {
+            actionHTML = `
+                <div class="actions">
+                <button onclick="retryCacheUpload(${index})">📦 重试上传</button>
+                <button onclick="removeItem(${index})">移除</button>
+                </div>
+            `;
+        }
+
         const li = document.createElement('li');
         li.innerHTML = `
             <span>
                 ${index + 1}. ${file.name}
                 <span class="small">(${formatSize(file.size)})</span>
                 ${statusText ? `<span class="small ${statusClass}" style="margin-left:8px;">${statusText}</span>` : ''}
+                ${cacheText ? `<span class="small ${cacheClass}" style="margin-left:6px;">${cacheText}</span>` : ''}
             </span>
             ${actionHTML}
             `;
@@ -200,6 +239,24 @@ async function retryTranscode(index) {
 
     // 可选：立刻开始转码（或等用户点“开始推流”）
     setStatus(`请点击开始推流来重新转码：${item.originalFile.name}`);
+}
+
+async function retryCacheUpload(index) {
+    const item = playlist[index];
+    if (!item || item.transcodeStatus !== TranscodeStatus.DONE) return;
+
+    try {
+        item.cacheStatus = CacheStatus.UPLOADING;
+        renderPlaylist();
+        await uploadTranscodedCache(item, item.transcodedFile, item.fingerprint);
+        item.cacheStatus = CacheStatus.DONE;
+    } catch (e) {
+        console.warn(`[WARN] failed to upload transcoded video: ${item.originalFile.name}`);
+        item.cacheStatus = CacheStatus.ERROR;
+    }
+    finally {
+        renderPlaylist();
+    }
 }
 
 function hasTranscodeErrors() {
@@ -278,6 +335,28 @@ function canClientTranscode() {
 
 function isMobileDevice() {
     return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+}
+
+function shouldAutoUploadAfterTranscode(currentIndex) {
+    // 规则 A：只有一个视频
+    if (playlist.length === 1) {
+        return false;
+    }
+
+    // 是否存在转码失败的视频
+    const hasFailed = playlist.some(
+        item => item.transcodeStatus === TranscodeStatus.ERROR
+    );
+
+    // 规则 B：当前是最后一个 + 没有失败
+    if (
+        currentIndex === playlist.length - 1 &&
+        !hasFailed
+    ) {
+        return false;
+    }
+
+    return true;
 }
 
 // ===== API =====
@@ -370,7 +449,8 @@ async function start() {
             if (check?.exists) {
                 // ✅ 已有缓存
                 existingItems.push({ filePath: check.path, index: i });
-                item.transcodeStatus = TranscodeStatus.DONE;
+                item.transcodeStatus = TranscodeStatus.NONE;
+                item.cacheStatus = CacheStatus.DONE;
                 renderPlaylist();
                 continue;
             }
@@ -394,8 +474,23 @@ async function start() {
                 const safeFile = await transcodeToRTMPSafe(file, i, total);
                 uploadItems.push({ file: safeFile, fingerprint: fp, index: i });
 
+                item.transcodedFile = safeFile;
                 item.transcodeStatus = TranscodeStatus.DONE;
                 renderPlaylist();
+
+                if (isAutoUploadEnabled() &&
+                    shouldAutoUploadAfterTranscode(i)) {
+                    try {
+                        item.cacheStatus = CacheStatus.UPLOADING;
+                        renderPlaylist();
+                        await uploadTranscodedCache(item, safeFile, fp);
+                    } catch (e) {
+                        console.warn('[cache] upload failed', e);
+                        // ⚠️ 不影响推流流程
+                    } finally {
+                        renderPlaylist();
+                    }
+                }
             }
             catch (err) {
                 if (String(err?.message).includes('called FFmpeg.terminate()')) {
@@ -410,7 +505,7 @@ async function start() {
                 }
 
                 // 如果后面没有待转码的视频时就隐藏转码进度条
-                if (i == total-1) {
+                if (i == total - 1) {
                     hideTranscodeStatus();
                 }
                 renderPlaylist();
@@ -418,23 +513,29 @@ async function start() {
             }
         }
     }
-    
+
     if (existingItems.length == 0 && uploadItems.length == 0) {
         setStatus('文件转码失败', 'error');
         return;
     }
 
-    for (const item of existingItems) {
-        form.append('existing', JSON.stringify(item));
-    }
-
     for (const item of uploadItems) {
-        form.append('files', item.file, item.file.name);
-        form.append('fingerprints', item.fingerprint);
+        if (item.cacheStatus == CacheStatus.DONE && item.cachedPath.length > 0) {
+            existingItems.push({ filePath: item.cachedPath, index: item.index });
+        }
+        else {
+            form.append('files', item.file, item.file.name);
+            form.append('fingerprints', item.fingerprint);
+            form.append('indexs', item.index);
+        }
     }
 
     if (uploadItems.length > 0) {
         form.append('clientTranscoded', '1');
+    }
+
+    for (const item of existingItems) {
+        form.append('existing', JSON.stringify(item));
     }
 
     form.append('mode', mode);
@@ -464,8 +565,6 @@ async function start() {
 
         // ✅ 用户选择“是”：继续推流（忽略 ERROR）
     }
-
-    console.log('[INFO] try to push stream');
     setStatus('📡 正在启动推流…');
 
     const res = await fetch('/api/stream/start', {
@@ -490,14 +589,40 @@ async function stop() {
             'x-admin-token': token
         },
     });
-    const text = await res.text();
-    setStatus(text);
+
+    if (!res.ok) {
+        setStatus('请求停止推流失败');
+    }
 }
 
-const TARGET_WIDTH = 1280;
-const TARGET_HEIGHT = 720;
-const TARGET_FPS = 30;
-const VIDEO_BITRATE = 2_000_000; // 2 Mbps
+async function uploadTranscodedCache(item, file, fingerprint) {
+    // ✅ 已缓存，直接跳过
+    if (item.cacheStatus === CacheStatus.DONE) {
+        return;
+    }
+    const token = await loadAdminToken();
+
+    const form = new FormData();
+    form.append('file', file, file.name);
+    form.append('fingerprint', fingerprint);
+
+    const res = await fetch('/api/stream/cache', {
+        method: 'PUT',
+        headers: {
+            'x-admin-token': token
+        },
+        body: form
+    });
+
+    if (!res.ok) {
+        item.cacheStatus = CacheStatus.ERROR;
+        throw new Error('UPLOAD_CACHE_FAILED');
+    }
+
+    item.cacheStatus = CacheStatus.DONE;
+    item.cachedPath = res.path;
+}
+
 const MAX_CLIENT_DURATION = 2 * 60 * 60; // 2 hours
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
@@ -560,16 +685,8 @@ export async function getFFmpeg() {
     return ffmpeg;
 }
 
-async function fileExistsAndSize(name) {
-    try {
-        const data = await ffmpeg.readFile(name);
-        console.log(`${name} 存在，大小：${data.byteLength} bytes`);
-        return data.byteLength;
-    } catch (err) {
-        console.log(`${name} 不存在或读取失败：`, err.message);
-        return 0;
-    }
-}
+// owncast上设置的fps也是24
+const TARGET_FPS = 24;
 
 async function transcodeToRTMPSafe(file, index, total) {
     if (file.duration && file.duration > MAX_CLIENT_DURATION) {
@@ -595,16 +712,16 @@ async function transcodeToRTMPSafe(file, index, total) {
             '-i', inputName,
 
             // ===== 视频 =====
-            // '-vf', 'format=yuv420p',
-            '-vf', `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,format=yuv420p`,
+            '-vf', `format=yuv420p,fps=${TARGET_FPS}`,
+            // '-vf', `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,format=yuv420p`,
             '-c:v', 'libx264',
             '-pix_fmt', 'yuv420p',
             '-preset', 'veryfast',
-            '-crf', '23',
+            '-crf', '24',
 
             // 关键帧（RTMP 稳定）
-            '-g', String(60),
-            '-keyint_min', '30',
+            '-g', String(TARGET_FPS * 2),
+            '-keyint_min', String(TARGET_FPS),
             '-sc_threshold', '0',
 
             // ===== 音频（必须有）=====
@@ -633,7 +750,6 @@ async function transcodeToRTMPSafe(file, index, total) {
         throw err;
     }
 
-    console.log(`[INFO] transcoding finished, data.length=${data.length}`);
     if (!data || data.length === 0) {
         console.error('[transcode] empty output file', {
             file: file.name,
@@ -644,8 +760,8 @@ async function transcodeToRTMPSafe(file, index, total) {
 
     // ✅ 清理虚拟文件系统
     try {
-        await ffmpeg.unlink(inputName);
-        await ffmpeg.unlink(outputName);
+        await ffmpeg.deleteFile(inputName);
+        await ffmpeg.deleteFile(outputName);
     }
     catch (e) {
         console.warn(`[WARN] unlink file failed, error: ${e}`);
@@ -694,7 +810,8 @@ function bindUI() {
 
         let added = false;
 
-        for (const file of files) {
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
             // ⚠️ 这里仍然可以用 fileKey 做“快速去重”
             const key = fileKey(file);
             if (fileFingerprints.has(key)) {
@@ -705,9 +822,12 @@ function bindUI() {
             const fingerprint = await fingerprintFile(file);
 
             playlist.push({
+                index: i,
                 originalFile: file,
                 fingerprint,
-                transcodeStatus: TranscodeStatus.NONE
+                transcodeStatus: TranscodeStatus.NONE,
+                cacheStatus: CacheStatus.NONE,
+                cachedPath: ''
             });
 
             fileFingerprints.add(key);
@@ -741,3 +861,4 @@ window.stop = stop;
 window.cancelTranscode = cancelTranscode;
 window.removeItem = removeItem;
 window.retryTranscode = retryTranscode;
+window.retryCacheUpload = retryCacheUpload;

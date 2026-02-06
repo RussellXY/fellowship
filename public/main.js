@@ -196,7 +196,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   let hls;
 
   if (Hls.isSupported()) {
-    hls = new Hls();
+    const hls = new Hls({
+      liveSyncDuration: 2,
+      liveMaxLatencyDuration: 5,
+      maxBufferLength: 10,
+      maxLiveSyncPlaybackRate: 1.5,
+      lowLatencyMode: true,
+      backBufferLength: 0
+    });
     hls.loadSource(liveUrl);
     hls.attachMedia(video);
   } else {

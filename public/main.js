@@ -122,11 +122,9 @@ window.addEventListener('DOMContentLoaded', async () => {
       suppressLocalEvent = true;
       video.currentTime = data.currentTime;
 
-      video.play().catch(() => { });
-
-      setTimeout(() => {
+      video.play().catch(() => { }).finally(() => {
         suppressLocalEvent = false;
-      }, 0);
+      });;
     }
 
     // ===== 暂停 =====
@@ -431,7 +429,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   video.addEventListener('pause', () => {
-    if (!allowLocalControl || suppressLocalEvent) return
+    if (!allowLocalControl || suppressLocalEvent) return;
+
+    // 如果视频本来就不是 playing，就别广播
+    if (video.ended || video.readyState < 2) return;
 
     wsSend({
       type: 'pause',

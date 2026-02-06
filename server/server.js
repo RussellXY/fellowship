@@ -595,6 +595,7 @@ function startFfmpeg(mode, dir, playlistPath, isClientTranscoded) {
     args = [
       '-nostats',
       '-loglevel', 'info',
+      '-stream_loop', ' -1',
       '-re',
       '-f', 'concat',
       '-safe', '0',

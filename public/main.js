@@ -104,18 +104,18 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     if (Hls.isSupported()) {
       hls = new Hls({
-        // 低延迟仍然保留
+        // 低延迟模式仍然开启
         lowLatencyMode: true,
 
-        // 🎯 关键：新观众不要贴 live edge
-        liveSyncDuration: 4,          // ≈ 2 个 segment
-        liveMaxLatencyDuration: 8,
+        // 🎯 关键：启动时不要贴 live edge
+        liveSyncDuration: 4,          // 秒（≈ 2 个 segment）
+        liveMaxLatencyDuration: 8,    // 允许最大延迟
 
-        // buffer 控制
+        // buffer 策略
         maxBufferLength: 15,
         backBufferLength: 0,
 
-        // 卡顿时追帧
+        // 卡顿恢复
         maxLiveSyncPlaybackRate: 1.5
       });
       hls.loadSource(liveUrl);

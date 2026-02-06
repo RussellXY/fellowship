@@ -86,7 +86,7 @@ function scheduleWSReconnect() {
 }
 
 function connectStreamWS() {
-    if (ws && ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) return;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
     wsManuallyClosed = false;
 
@@ -804,7 +804,7 @@ export async function getFFmpeg() {
     return ffmpeg;
 }
 
-// owncast上设置的fps也是24
+// owncast上设置的fps也是24，不要随便改(24也是直播比较友好的一个值)
 const TARGET_FPS = 24;
 
 async function transcodeToRTMPSafe(file, index, total) {
@@ -831,26 +831,31 @@ async function transcodeToRTMPSafe(file, index, total) {
             '-i', inputName,
 
             // ===== 视频 =====
-            '-vf', `format=yuv420p,fps=${TARGET_FPS}`,
-            // '-vf', `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,format=yuv420p`,
+            '-vf', "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease,format=yuv420p",
+            '-r', `${TARGET_FPS}`,
             '-c:v', 'libx264',
             '-pix_fmt', 'yuv420p',
-            '-preset', 'veryfast',
-            '-crf', '24',
+            '-preset', 'superfast',
+            '-tune', 'zerolatency',
+            '-x264-params', 'ref=2:bframes=0:rc-lookahead=0',
+
+            // 🎯 720p 低流量关键
+            '-b:v', '1100k',
+            '-maxrate', '1100k',
+            '-bufsize', '2200k',
+            '-crf', '27', // 这个选项能够加快转码速度，但如果转码后的视频导致直播有些卡顿的话就注释掉这个选项
 
             // 关键帧（RTMP 稳定）
             '-g', String(TARGET_FPS * 2),
-            '-keyint_min', String(TARGET_FPS),
+            '-keyint_min', String(TARGET_FPS*2),
             '-sc_threshold', '0',
 
             // ===== 音频（必须有）=====
             '-c:a', 'aac',
             '-strict', 'experimental',
-            '-ar', '44100',
+            '-ar', '48000',
             '-ac', '2',
-            '-b:a', '128k',
-
-            '-movflags', '+faststart',
+            '-b:a', '64k',
             outputName
         ]);
     } catch (e) {

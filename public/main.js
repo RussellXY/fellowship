@@ -16,21 +16,34 @@ window.addEventListener('DOMContentLoaded', async () => {
   const refreshBtn = document.getElementById('refreshBtn');
 
   const controls = document.getElementById('controls');
+  const owncast = document.getElementById("owncast-iframe");
+  const OWNCAST_EMBED_URL = 'https://owncast.ledbygrace.live/embed/video';
 
   function isIOS() {
     return /iPad|iPhone|iPod/.test(navigator.userAgent)
       || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   }
 
-  if (isIOS()) {
-    // ===== iOS：系统播放器路径 =====
-    video.setAttribute('controls', '');
-    video.setAttribute('playsinline', 'false');
-    video.setAttribute('webkit-playsinline', 'false');
-  } else {
-    // ===== 桌面 / Android：页面内播放器 =====
-    video.setAttribute('playsinline', '');
-    video.setAttribute('controls');
+  const useOwncastIframe = isIOS();
+
+  if (useOwncastIframe) {
+    // ===== iOS：使用 Owncast 官方播放器 =====
+    owncast.src = OWNCAST_EMBED_URL;
+    owncast.classList.remove('hidden');
+    video.classList.add('hidden');
+    toggleBtn.style.display = "none";
+  }
+
+  function sendOwncastCommand(type, currentTime) {
+    if (!useOwncastIframe) return;
+    try {
+      owncast.contentWindow?.postMessage({
+        type,
+        currentTime
+      }, '*');
+    } catch (e) {
+      // 跨域 iframe 可能不支持控制，忽略即可
+    }
   }
 
   // ===== 1. 获取 token =====
@@ -116,25 +129,18 @@ window.addEventListener('DOMContentLoaded', async () => {
       hls = null;
     }
 
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // ⭐ iOS / WebKit：直接交给系统
-      video.src = src;
+    if (useOwncastIframe) {
+      // iOS: 重新加载 Owncast iframe
+      owncast.src = 'about:blank';
+      setTimeout(() => {
+        owncast.src = OWNCAST_EMBED_URL;
+      }, 50);
       return;
     }
 
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
     if (Hls.isSupported()) {
-      const hlsConfig = isMobile
-        ? {
-          lowLatencyMode: false,
-          liveSyncDuration: 12,
-          liveMaxLatencyDuration: 20,
-          maxBufferLength: 30,
-          backBufferLength: 5,
-          maxLiveSyncPlaybackRate: 1.0
-        } :
-        {// 低延迟模式仍然开启
+      hls = new Hls({
+        // 低延迟模式仍然开启
           lowLatencyMode: true,
           // 🎯 关键：启动时不要贴 live edge
           liveSyncDuration: 6,          // 秒（≈ 2 个 segment）
@@ -150,8 +156,7 @@ window.addEventListener('DOMContentLoaded', async () => {
           startLevel: -1,
           // 卡顿恢复
           maxLiveSyncPlaybackRate: 1.5
-        };
-      hls = new Hls(hlsConfig);
+      });
       hls.loadSource(liveUrl);
       hls.attachMedia(video);
 
@@ -174,18 +179,26 @@ window.addEventListener('DOMContentLoaded', async () => {
     // ===== 播放 =====
     if (data.type === 'play') {
       suppressLocalEvent = true;
+      if (useOwncastIframe) {
+        sendOwncastCommand('play', data.currentTime);
+        suppressLocalEvent = false;
+        return;
+      }
       video.currentTime = data.currentTime;
 
-      if (isIOS() == false) {
-        video.play().catch(() => { }).finally(() => {
-          suppressLocalEvent = false;
-        });;
-      }
+      video.play().catch(() => { }).finally(() => {
+        suppressLocalEvent = false;
+      });;
     }
 
     // ===== 暂停 =====
     if (data.type === 'pause') {
       suppressLocalEvent = true;
+      if (useOwncastIframe) {
+        sendOwncastCommand('pause', data.currentTime);
+        suppressLocalEvent = false;
+        return;
+      }
       video.currentTime = data.currentTime;
       video.pause();
 
@@ -216,9 +229,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       suppressLocalEvent = true;
 
       // 时间 & 播放状态
-      video.currentTime = data.state.currentTime;
+      if (useOwncastIframe) {
+        sendOwncastCommand(
+          data.state.playing ? 'play' : 'pause',
+          data.state.currentTime
+        );
+      } else {
+        video.currentTime = data.state.currentTime;
 
-      if (isIOS() == false) {
         if (data.state.playing) {
           video.play().catch(() => { });
         } else {
@@ -248,11 +266,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ===== 4. HLS 播放 =====
-  const liveUrl = '/live/hls/stream.m3u8';
+  const liveUrl = 'https://owncast.ledbygrace.live/hls/stream.m3u8';
   let hls;
 
-  if (Hls.isSupported()) {
-    const hls = new Hls({
+  if (!useOwncastIframe && Hls.isSupported()) {
+    hls = new Hls({
       // 低延迟模式仍然开启
       lowLatencyMode: true,
 
@@ -269,7 +287,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
     hls.loadSource(liveUrl);
     hls.attachMedia(video);
-  } else {
+  } else if (!useOwncastIframe) {
     video.src = liveUrl;
   }
 
@@ -279,11 +297,16 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (e.role === 'moderator') {
       allowLocalControl = true;
 
-      // 显示主持人控制区
-      controls.classList.remove('hidden');
-
       // ===== UI 解锁 =====
       toggleBtn.style.display = "flex";
+
+      if (useOwncastIframe) {
+        // iOS：不显示控制按钮
+        return;
+      }
+
+      // 显示主持人控制区
+      controls.classList.remove('hidden');
 
       // ===== 播放 =====
       playBtn.onclick = () => {
@@ -471,41 +494,43 @@ window.addEventListener('DOMContentLoaded', async () => {
   // ===== 7. 普通参会者禁止操作 =====
   let suppressLocalEvent = false;
 
-  video.addEventListener('play', () => {
-    if (suppressLocalEvent) return;
+  if (!useOwncastIframe) {
+    video.addEventListener('play', () => {
+      if (suppressLocalEvent) return;
 
-    if (!allowLocalControl) {
-      wsSend({ type: 'sync-request' });
-      return;
-    }
+      if (!allowLocalControl) {
+        wsSend({ type: 'sync-request' });
+        return;
+      }
 
-    // 主持人 + 用户手势
-    wsSend({
-      type: 'play',
-      currentTime: video.currentTime
+      // 主持人 + 用户手势
+      wsSend({
+        type: 'play',
+        currentTime: video.currentTime
+      });
     });
-  });
 
-  video.addEventListener('pause', () => {
-    if (!allowLocalControl || suppressLocalEvent) return;
+    video.addEventListener('pause', () => {
+      if (!allowLocalControl || suppressLocalEvent) return;
 
-    // 如果视频本来就不是 playing，就别广播
-    if (video.ended || video.readyState < 2) return;
+      // 如果视频本来就不是 playing，就别广播
+      if (video.ended || video.readyState < 2) return;
 
-    wsSend({
-      type: 'pause',
-      currentTime: video.currentTime
+      wsSend({
+        type: 'pause',
+        currentTime: video.currentTime
+      });
     });
-  });
 
-  video.addEventListener('seeking', () => {
-    if (!allowLocalControl || suppressLocalEvent) return;
+    video.addEventListener('seeking', () => {
+      if (!allowLocalControl || suppressLocalEvent) return;
 
-    wsSend({
-      type: 'pause',
-      currentTime: video.currentTime
+      wsSend({
+        type: 'pause',
+        currentTime: video.currentTime
+      });
     });
-  });
+  }
 
   function showLiveTailwind() {
     // 竖屏：Y 轴 modal
@@ -513,6 +538,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // 横屏 / 桌面：X 轴 slide
     live.classList.remove('md:translate-x-full');
+
+    if (useOwncastIframe && owncast.src !== OWNCAST_EMBED_URL) {
+      owncast.src = OWNCAST_EMBED_URL;
+    }
 
     toggleBtn.textContent = '❌';
   }
@@ -523,6 +552,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // 横屏 / 桌面
     live.classList.add('md:translate-x-full');
+
+    if (useOwncastIframe) {
+      owncast.src = 'about:blank';
+    }
 
     toggleBtn.textContent = '🎬';
   }

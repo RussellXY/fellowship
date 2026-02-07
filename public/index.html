@@ -48,9 +48,19 @@
       <!-- Player -->
       <video
         id="player"
-        preload="auto"
+        controls
+        playsinline
         class="w-full flex-1 bg-black object-contain"
       ></video>
+
+      <!-- Player (iOS only, Owncast official) -->
+      <iframe
+        id="owncast-iframe"
+        class="hidden w-full flex-1 bg-black border-0"
+        title="Owncast Player"
+        allow="autoplay; fullscreen; picture-in-picture"
+        allowfullscreen
+      ></iframe>
 
       <!-- Controls -->
       <div

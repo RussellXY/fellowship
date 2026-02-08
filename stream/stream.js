@@ -149,6 +149,7 @@ function connectStreamWS() {
             }
 
             if (data.status === 'running') {
+                currentStreamStatus = StreamStatus.RUNNING;
                 setStatus('✅ 推流中', 'ok');
             }
 
